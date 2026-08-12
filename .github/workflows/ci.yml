@@ -1,0 +1,37 @@
+# CI:多平台多版本 Node 下跑单元测试 + 文档路径检查。
+# 测试全部 mock 网络/系统命令,不消耗视觉 API,也不真截屏。
+# 主平台 Ubuntu 跑全部 Node 版本;Windows/macOS 用 Node 22(LTS)代表,
+# 以覆盖 captureScreen 的平台分派集成用例(win32/macOS 的截屏临时文件清理等)。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: 20
+          - os: ubuntu-latest
+            node: 22
+          - os: ubuntu-latest
+            node: 24
+          - os: windows-latest
+            node: 22
+          - os: macos-latest
+            node: 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run check:docs

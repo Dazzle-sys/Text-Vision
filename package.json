@@ -1,0 +1,22 @@
+{
+  "name": "text-vision",
+  "version": "0.1.0",
+  "description": "给无视觉文本模型(DeepSeek 等)提供视觉能力的 MCP server:图片/截屏转文字描述",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test --test-concurrency=1",
+    "check:docs": "node scripts/check-doc-paths.js",
+    "gen:test-image": "node scripts/gen-test-image.js",
+    "test:describe": "node -e \"import('./src/text-vision-client.js').then(async m => console.log(JSON.stringify(await m.describeImage('test/test.png'), null, 2)))\"",
+    "test:capture": "node -e \"import('./src/capture-screen.js').then(async m => console.log((await m.captureScreen()).filePath))\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "zod": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

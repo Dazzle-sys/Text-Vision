@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 import { writeFileSync, existsSync, mkdtempSync, rmSync, mkdirSync, readdirSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
-import { captureWindows, captureLinux, captureMac, captureScreen, cleanupScreenShot, defaultShotsDir, pruneShots } from '../src/capture-screen.js';
+import { captureWindows, captureLinux, captureMac, captureScreen, cleanupScreenShot, defaultShotsDir, defaultTarget, pruneShots } from '../src/capture-screen.js';
 import { resolvePsExe } from '../src/ps-exe.js';
 import { redactLocalPath } from '../src/redact.js';
 import { visionDir } from '../src/repo-root.js';
@@ -345,7 +345,7 @@ test('captureScreen:win32 分派到 captureWindows,返回 b64/mime/sizeBytes', w
     setImmediate(() => child.emit('close', 0));
     return child;
   };
-  const shot = await captureScreen({ shotsRoot, spawnFn, timeout: 30000, fallbackDelay: 1000, platform: 'win32' });
+  const shot = await captureScreen({ shotsRoot, spawnFn, timeout: 30000, fallbackDelay: 1000, platform: 'win32', defaultTarget: '' });
   assert.equal(shot.mime, 'image/jpeg');
   assert.ok(shot.b64.length > 0);
   assert.ok(shot.sizeBytes > 0);
@@ -358,7 +358,7 @@ test('captureScreen:darwin 分派到 captureMac,返回 b64/mime/sizeBytes', with
     if (cmd === 'screencapture') writeFileSync(args[1], Buffer.from('rawpng'));
     else if (cmd === 'sips') writeFileSync(args.at(-1), Buffer.from('jpgdata'));
   };
-  const shot = await captureScreen({ shotsRoot, execFileFn, timeout: 30000, platform: 'darwin' });
+  const shot = await captureScreen({ shotsRoot, execFileFn, timeout: 30000, platform: 'darwin', defaultTarget: '' });
   assert.equal(shot.mime, 'image/jpeg');
   assert.ok(shot.b64.length > 0);
   assert.ok(shot.sizeBytes > 0);
@@ -369,14 +369,14 @@ test('captureScreen:linux 分派到 captureLinux,返回 b64/mime(png)', withShot
   const execFileFn = async (cmd, args) => {
     if (cmd === 'gnome-screenshot') writeFileSync(args[1], Buffer.from('pngdata'));
   };
-  const shot = await captureScreen({ shotsRoot, execFileFn, timeout: 30000, platform: 'linux' });
+  const shot = await captureScreen({ shotsRoot, execFileFn, timeout: 30000, platform: 'linux', defaultTarget: '' });
   assert.equal(shot.mime, 'image/png');
   assert.ok(shot.b64.length > 0);
   assert.ok(shot.filePath.startsWith(shotsRoot));
 }));
 
 test('captureScreen:不支持的平台 → 明确报错', withShots(async (shotsRoot) => {
-  await assert.rejects(captureScreen({ shotsRoot, platform: 'sunos' }), /暂不支持在当前平台\(sunos\)截屏/);
+  await assert.rejects(captureScreen({ shotsRoot, platform: 'sunos', defaultTarget: '' }), /暂不支持在当前平台\(sunos\)截屏/);
 }));
 
 // --- captureScreen target 场景(注入 listWindows,win32 重点)---
@@ -427,6 +427,89 @@ test('captureScreen:target 为空 → 当全屏处理,无 note 且无 HWND', wit
   assert.equal(shot.note, undefined);
 }));
 
+test('captureScreen:未传 target 但配置默认 target → 走窗口截图,env 含匹配窗口 HWND 且返回 targetLabel', withShots(async (shotsRoot) => {
+  let spawnArgs;
+  const child = fakeChild();
+  const spawnFn = (cmd, args, opts) => {
+    spawnArgs = { cmd, args, opts };
+    writeFileSync(opts.env.TEXT_VISION_SHOT, Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x00]));
+    setImmediate(() => child.emit('close', 0));
+    return child;
+  };
+  const listWindows = async () => [{ id: '456', process: 'chrome', title: 'Google Chrome', width: 800, height: 600 }];
+  const shot = await captureScreen({ shotsRoot, defaultTarget: 'chrome', listWindows, spawnFn, timeout: 30000, fallbackDelay: 1000, platform: 'win32' });
+  assert.equal(spawnArgs.opts.env.TEXT_VISION_HWND, '456');
+  assert.equal(shot.note, undefined);
+  assert.equal(shot.targetLabel, 'Google Chrome', '命中窗口时 targetLabel 取 title 优先');
+}));
+
+test('captureScreen:默认 target 未找到 → 回退全屏,note 含未找到且无 HWND', withShots(async (shotsRoot) => {
+  let spawnArgs;
+  const child = fakeChild();
+  const spawnFn = (cmd, args, opts) => {
+    spawnArgs = { cmd, args, opts };
+    writeFileSync(opts.env.TEXT_VISION_SHOT, Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x00]));
+    setImmediate(() => child.emit('close', 0));
+    return child;
+  };
+  const listWindows = async () => [];
+  const shot = await captureScreen({ shotsRoot, defaultTarget: '不存在的程序xyz', listWindows, spawnFn, timeout: 30000, fallbackDelay: 1000, platform: 'win32' });
+  assert.equal(spawnArgs.opts.env.TEXT_VISION_HWND, undefined, '未命中不应传 HWND');
+  assert.match(shot.note, /未找到/);
+  assert.match(shot.note, /不存在的程序xyz/);
+  assert.equal(shot.targetLabel, null, '未命中时 targetLabel 应为 null');
+}));
+
+test('captureScreen:未配置默认 target → 全屏(回归),不枚举窗口', withShots(async (shotsRoot) => {
+  let spawnArgs;
+  const child = fakeChild();
+  const spawnFn = (cmd, args, opts) => {
+    spawnArgs = { cmd, args, opts };
+    writeFileSync(opts.env.TEXT_VISION_SHOT, Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x00]));
+    setImmediate(() => child.emit('close', 0));
+    return child;
+  };
+  const listWindows = async () => { throw new Error('不应枚举窗口'); };
+  const shot = await captureScreen({ shotsRoot, defaultTarget: '', listWindows, spawnFn, timeout: 30000, fallbackDelay: 1000, platform: 'win32' });
+  assert.equal(spawnArgs.opts.env.TEXT_VISION_HWND, undefined);
+  assert.equal(shot.note, undefined);
+  assert.equal(shot.targetLabel, null);
+}));
+
+test('captureScreen:显式 target 空串覆盖默认 target → 全屏', withShots(async (shotsRoot) => {
+  let spawnArgs;
+  const child = fakeChild();
+  const spawnFn = (cmd, args, opts) => {
+    spawnArgs = { cmd, args, opts };
+    writeFileSync(opts.env.TEXT_VISION_SHOT, Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x00]));
+    setImmediate(() => child.emit('close', 0));
+    return child;
+  };
+  const listWindows = async () => { throw new Error('不应枚举窗口'); };
+  const shot = await captureScreen({ target: '', shotsRoot, defaultTarget: 'chrome', listWindows, spawnFn, timeout: 30000, fallbackDelay: 1000, platform: 'win32' });
+  assert.equal(spawnArgs.opts.env.TEXT_VISION_HWND, undefined, '显式空串应覆盖默认 target 走全屏');
+  assert.equal(shot.note, undefined);
+  assert.equal(shot.targetLabel, null);
+}));
+
+test('captureScreen:target 为"全屏"/"fullscreen"(大小写不敏感)→ 全屏且不枚举窗口', withShots(async (shotsRoot) => {
+  for (const marker of ['全屏', 'fullscreen', 'FULLSCREEN', ' Fullscreen ']) {
+    let spawnArgs;
+    const child = fakeChild();
+    const spawnFn = (cmd, args, opts) => {
+      spawnArgs = { cmd, args, opts };
+      writeFileSync(opts.env.TEXT_VISION_SHOT, Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x00]));
+      setImmediate(() => child.emit('close', 0));
+      return child;
+    };
+    const listWindows = async () => { throw new Error('不应枚举窗口'); };
+    const shot = await captureScreen({ target: marker, shotsRoot, listWindows, spawnFn, timeout: 30000, fallbackDelay: 1000, platform: 'win32' });
+    assert.equal(spawnArgs.opts.env.TEXT_VISION_HWND, undefined, `target="${marker}" 不应传 HWND`);
+    assert.equal(shot.note, undefined);
+    assert.equal(shot.targetLabel, null);
+  }
+}));
+
 // ---------------------------------------------------------------------------
 // 截图目录:VISION_SHOTS_DIR 配置优先,未配置回退仓库 .text-vision/screenshots
 // ---------------------------------------------------------------------------
@@ -435,6 +518,14 @@ test('defaultShotsDir:VISION_SHOTS_DIR 配置优先(去空白),未配置/空串�
   assert.equal(defaultShotsDir({ VISION_SHOTS_DIR: '  C:/shots  ' }), 'C:/shots', '应去掉首尾空白');
   assert.equal(defaultShotsDir({}), join(visionDir(), 'screenshots'));
   assert.equal(defaultShotsDir({ VISION_SHOTS_DIR: '' }), join(visionDir(), 'screenshots'));
+});
+
+test('defaultTarget:VISION_DEFAULT_TARGET 配置优先(去空白),未配置/空串/纯空白回退 null(=全屏)', () => {
+  assert.equal(defaultTarget({ VISION_DEFAULT_TARGET: 'chrome' }), 'chrome');
+  assert.equal(defaultTarget({ VISION_DEFAULT_TARGET: '  chrome  ' }), 'chrome', '应去掉首尾空白');
+  assert.equal(defaultTarget({}), null);
+  assert.equal(defaultTarget({ VISION_DEFAULT_TARGET: '' }), null);
+  assert.equal(defaultTarget({ VISION_DEFAULT_TARGET: '   ' }), null);
 });
 
 // ---------------------------------------------------------------------------
@@ -546,7 +637,7 @@ test('captureScreen:底层失败错误含路径 → 兜底脱敏后抛出', with
     });
     return child;
   };
-  const err = await captureScreen({ shotsRoot, spawnFn, timeout: 30000, fallbackDelay: 1000, platform: 'win32' }).then(() => null, e => e);
+  const err = await captureScreen({ shotsRoot, spawnFn, timeout: 30000, fallbackDelay: 1000, platform: 'win32', defaultTarget: '' }).then(() => null, e => e);
   assert.ok(err, '应拒绝');
   assert.ok(!/text-vision-shot/.test(err.message), 'captureScreen 不得泄露截屏临时目录');
   assert.match(err.message, /\[本地路径\]/);

@@ -127,14 +127,15 @@ This project **reads no configuration file**; all settings come from environment
         "VISION_API_KEY": "your-GLM-4V-key",
         "VISION_MODEL": "glm-4v-plus",
         "VISION_TIMEOUT": "60000",
-        "VISION_LOG_FILE": ""
+        "VISION_LOG_FILE": "",
+        "VISION_DEFAULT_TARGET": ""
       }
     }
   }
 }
 ```
 
-The complete list of supported environment variables is in the README's "Configuration" section (the `VISION_*` prefix). You may omit the `env` field and export the variables in the terminal before starting (e.g. `export VISION_API_KEY=...`) — either approach is acceptable. `VISION_LOG_FILE` is optional: the path of the diagnostic log file written when a targeted-window capture fails or falls back. If unset, it defaults to `.text-vision/log.txt` under this repository's root — useful for troubleshooting why the target window was not captured.
+The complete list of supported environment variables is in the README's "Configuration" section (the `VISION_*` prefix). You may omit the `env` field and export the variables in the terminal before starting (e.g. `export VISION_API_KEY=...`) — either approach is acceptable. `VISION_LOG_FILE` is optional: the path of the diagnostic log file for vision calls (defaults to `.text-vision/log.txt` under this repository's root). Failures (`vision_failed`) and screen-capture fallbacks (`screen_capture_degrade`) are always written; successes (`vision_ok`) can be disabled with `VISION_LOG_SUCCESS=0` — useful for troubleshooting why the vision model errored. `VISION_DEFAULT_TARGET` is optional: when set, `screen_capture()` without `target` captures that program's window by default (leave empty to disable); see the "Targeted Window Capture" section in the README.
 
 ## 7. Moving Machines / Directories
 

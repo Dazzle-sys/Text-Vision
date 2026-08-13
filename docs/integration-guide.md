@@ -125,14 +125,15 @@ args = ["text-vision/src/index.js"]
         "VISION_API_KEY": "你的GLM-4V的Key",
         "VISION_MODEL": "glm-4v-plus",
         "VISION_TIMEOUT": "60000",
-        "VISION_LOG_FILE": ""
+        "VISION_LOG_FILE": "",
+        "VISION_DEFAULT_TARGET": ""
       }
     }
   }
 }
 ```
 
-支持的全部环境变量见 README「配置」一节(`VISION_*` 前缀)。也可以不写 `env` 字段,直接在终端导出后启动(如 `export VISION_API_KEY=...`),二选一即可。其中 `VISION_LOG_FILE` 可选:指定窗口失败/降级时的诊断日志文件路径,不填则写本仓库根 `.text-vision/log.txt`,用于排查"为什么没用指定窗口"。
+支持的全部环境变量见 README「配置」一节(`VISION_*` 前缀)。也可以不写 `env` 字段,直接在终端导出后启动(如 `export VISION_API_KEY=...`),二选一即可。其中 `VISION_LOG_FILE` 可选:视觉调用的诊断日志文件路径(默认本仓库根 `.text-vision/log.txt`),失败(`vision_failed`)与截屏降级(`screen_capture_degrade`)始终写入,成功(`vision_ok`)可用 `VISION_LOG_SUCCESS=0` 关闭,用于排查"视觉模型为何报错"等。`VISION_DEFAULT_TARGET` 可选:配置后 `screen_capture()` 不传 target 时默认截该程序窗口(留空=禁用),详见 README「指定窗口截取」小节。
 
 ## 7. 换机器 / 换目录
 

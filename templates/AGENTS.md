@@ -5,7 +5,7 @@ This machine uses a text-only model (e.g. DeepSeek) that cannot see images. When
 - `describe_image(path, focus?)` — describe an image
 - `ocr_image(path)` — extract text from an image (OCR)
 - `list_windows()` — list currently open windows (title + process name; includes minimized ones, marked "minimized")
-- `screen_capture(focus?, target?)` — capture the screen and describe it. Use `screen_capture()` for the current screen; to capture a **specific program window** (avoiding occlusion by other windows), call `list_windows()` first, then `screen_capture(target='process name or title')`
+- `screen_capture(focus?, target?)` — capture the screen and describe it. Use `screen_capture()` for the current screen (if `VISION_DEFAULT_TARGET` is set, it captures that window by default; pass `target=''` or `'fullscreen'`/`'全屏'` to force a full-screen capture); to capture a **specific program window** (avoiding occlusion by other windows), call `list_windows()` first, then `screen_capture(target='process name or title')`
 
 **When the user pastes or drops an image in the chat**: the host tool has already saved it as a local file, and the message usually carries the path or filename (e.g. `[Image 1] file xxx.png` / `![image](...)`). Do NOT reply "I can't see images" and do NOT ask the user for the path. Locate the file yourself — use the path from the message, or search the temp / project directories for recently created images when only a filename is given — then call `describe_image(path)` (or `ocr_image(path)` for captchas / error / document screenshots).
 

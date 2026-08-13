@@ -86,7 +86,7 @@ echo '{"tool_name":"Read","cwd":"<本仓库绝对路径>","tool_input":{"file_pa
 
 - 本机文本模型看不懂图片,遇到图片/截图/屏幕/界面/UI/图表/OCR 必须调 `text-vision` 工具,不直接读图片二进制
 - **用户粘贴/拖入的图片已落盘为本地文件**,消息里带路径/文件名线索;**不要回复"我不支持看图"、不要索要路径**,自行定位后调 `describe_image(path)`
-- 验证码/报错/文档截图优先 `ocr_image(path)`;当前屏幕用 `screen_capture(focus?)`,截指定程序窗口先 `list_windows()` 再 `screen_capture(target='进程名或标题')`
+- 验证码/报错/文档截图优先 `ocr_image(path)`;当前屏幕用 `screen_capture(focus?)`(配置了 `VISION_DEFAULT_TARGET` 时默认截该窗口),截指定程序窗口先 `list_windows()` 再 `screen_capture(target='进程名或标题')`
 
 ### 2.2 `AGENTS.md`(OpenCode / Cursor / Gemini CLI / Codex 等通用,放项目根)
 

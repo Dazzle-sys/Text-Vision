@@ -88,7 +88,7 @@ Ready-made template: [`templates/CLAUDE.md`](../templates/CLAUDE.md) — copy it
 
 - The local text model cannot see images; on any image / screenshot / screen / UI / chart / OCR it MUST call a `text-vision` tool, never read image bytes directly
 - **A pasted/dropped image is already a local file**; the message carries a path/filename clue; **do NOT reply "I can't see images", do NOT ask for the path** — locate the file and call `describe_image(path)`
-- Prefer `ocr_image(path)` for captchas / error / document screenshots; use `screen_capture(focus?)` for the current screen, or `list_windows()` + `screen_capture(target=…)` for a specific program window
+- Prefer `ocr_image(path)` for captchas / error / document screenshots; use `screen_capture(focus?)` for the current screen (with `VISION_DEFAULT_TARGET` set, it captures that window by default), or `list_windows()` + `screen_capture(target=…)` for a specific program window
 
 ### 2.2 `AGENTS.md` (general — OpenCode / Cursor / Gemini CLI / Codex; place in the project root)
 
@@ -96,7 +96,7 @@ Ready-made template: [`templates/AGENTS.md`](../templates/AGENTS.md) — copy it
 
 - Text-only model cannot see images; on any image / screenshot / screen / UI / OCR, MUST call a `text-vision` tool
 - **User pasted or dropped an image → it is already a local file**; do NOT reply "I can't see images" and do NOT ask for the path — locate the file (use the path in the message, or search temp / project dirs for recent images) and call `describe_image(path)`
-- Prefer `ocr_image(path)` for captchas / error / document screenshots; use `screen_capture(focus?)` for the current screen, or `list_windows()` + `screen_capture(target=…)` for a specific program window
+- Prefer `ocr_image(path)` for captchas / error / document screenshots; use `screen_capture(focus?)` for the current screen (with `VISION_DEFAULT_TARGET` set, it captures that window by default), or `list_windows()` + `screen_capture(target=…)` for a specific program window
 
 > Why is `AGENTS.md` written in English? Rule files in OpenCode/Cursor are often executed by the model as direct instructions, and English triggers more reliably. `CLAUDE.md` remains in Chinese because this repository's primary readers are Chinese. Either file may be adjusted to your preference.
 

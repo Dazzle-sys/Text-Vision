@@ -48,7 +48,11 @@ export function createServer(deps = {}) {
       try {
         return await fn(args);
       } catch (err) {
-        return textResult({ ok: false, text: `${prefix}失败: ${redactLocalPath(err?.message ?? String(err))}` });
+        const msg = `${prefix}失败: ${redactLocalPath(err?.message ?? String(err))}`;
+        // 兜底异常同样落盘,避免"该记录却查不到";appendLogFn 已是注入依赖,失败静默不拖垮主流程
+        // (await 与下方降级日志一致,防注入的 async 实现 reject 变成 unhandledRejection 拖垮进程)
+        try { await appendLogFn('tool_error', msg); } catch { /* 日志失败静默 */ }
+        return textResult({ ok: false, text: msg });
       }
     };
   }
@@ -86,10 +90,10 @@ export function createServer(deps = {}) {
   server.registerTool(
     'screen_capture',
     {
-      description: '截取屏幕(全屏或指定程序窗口)并用视觉模型描述画面,截屏内容会发送到第三方视觉 API 处理。适合查看当前应用界面、UI 状态。传 target(进程名或窗口标题,模糊匹配)可只截取该程序窗口,避免其他窗口遮挡影响识别质量;可用 list_windows 先查看当前有哪些窗口可选。',
+      description: '截取屏幕(全屏或指定程序窗口)并用视觉模型描述画面,截屏内容会发送到第三方视觉 API 处理。适合查看当前应用界面、UI 状态。传 target(进程名或窗口标题,模糊匹配)可只截取该程序窗口,避免其他窗口遮挡影响识别质量;不传 target 时若配置了环境变量 VISION_DEFAULT_TARGET 则按它截取指定窗口,否则截全部显示器全屏;可用 list_windows 先查看当前有哪些窗口可选。',
       inputSchema: z.object({
         focus: z.string().optional().describe('关注的要点,如"当前界面布局""错误弹窗内容"'),
-        target: z.string().optional().describe('要截取的程序/窗口:进程名或窗口标题(如 chrome、未命名 - 记事本),模糊匹配。被遮挡/最小化窗口也能截到本体内容。不传则截全部显示器全屏;找不到匹配窗口时自动回退全屏并提示')
+        target: z.string().optional().describe('要截取的程序/窗口:进程名或窗口标题(如 chrome、未命名 - 记事本),模糊匹配。被遮挡/最小化窗口也能截到本体内容。不传 target 时:若配置了 VISION_DEFAULT_TARGET 则按它截取指定窗口,否则截全部显示器全屏;显式传空串或"全屏"/"fullscreen"(大小写不敏感)都截全屏。找不到匹配窗口时自动回退全屏并提示')
       })
     },
     wrapTool('截屏', async ({ focus, target }) => {
@@ -104,7 +108,18 @@ export function createServer(deps = {}) {
         try { await appendLogFn('screen_capture_degrade', shot.note); } catch { /* 日志失败静默 */ }
         debugLogFn('指定窗口截图降级:', shot.note);
       }
-      const r = await describeBase64(shot.b64, shot.mime, focus || (target ? `指定的窗口:${target}` : '当前屏幕/UI 界面'));
+      // 第 4 参是 cfg(缺省走 loadConfig 读 env,这里显式 undefined 占位),第 5 参 source 用于失败日志定位
+      // (拼上截图落盘路径,失败时可查是哪个截图文件)、第 6 参 sourceLabel 用于成功日志(纯标签'截屏',不含路径)。
+      // 切勿把 source 直接放第 4 位——cfg 会被字符串污染,describeImageFromBase64 误判"视觉引擎未配置"。
+      const src = shot?.filePath ? `截屏 ${shot.filePath}` : '截屏';
+      // focus 提示词:显式传 focus 用它;否则显式 target 用 target 原文(与旧行为逐字节一致),
+      // 未传 target 但默认 target(VISION_DEFAULT_TARGET)命中时用真实窗口名,提升透明度;其余全屏用兜底文案。
+      const focusText = focus || (target
+        ? `指定的窗口:${target}`
+        : shot?.targetLabel
+          ? `指定的窗口:${shot.targetLabel}`
+          : '当前屏幕/UI 界面');
+      const r = await describeBase64(shot.b64, shot.mime, focusText, undefined, src, '截屏');
       // 描述成功才把降级提示拼进返回文本;描述失败时文本是错误文案,note 已通过日志(文件+stderr)传达
       const hint = r.ok && shot?.note ? `\n\n[提示] ${shot.note}` : '';
       // 截图保留在仓库 .text-vision/screenshots(最近 20 张),直接给完整路径方便打开(运行时输出,不入提交)

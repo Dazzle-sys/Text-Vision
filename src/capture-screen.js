@@ -1,4 +1,5 @@
-// 跨平台截屏:按操作系统分派系统自带命令,统一返回 { filePath, note? }。
+// 跨平台截屏:按操作系统分派系统自带命令。平台级函数(captureWindows/captureMac/captureLinux)
+// 统一返回 { filePath, note? };主入口 captureScreen 再读文件转 base64,返回 { b64, filePath, sizeBytes, mime, note? }。
 // 支持两种模式:全屏(默认)与指定窗口(captureScreen 传 target,经 list-windows.js 枚举匹配到窗口 id)。
 // 截图落盘到 text-vision 仓库根的 .text-vision/screenshots(保留最近 MAX_SHOTS 张),方便查看,不随临时目录清理。
 //   win32 → PowerShell + System.Drawing(零安装)
@@ -32,6 +33,14 @@ const MAX_SHOTS = 20;
  */
 export function defaultShotsDir(env = process.env) {
   return (env.VISION_SHOTS_DIR || '').trim() || join(visionDir(), 'screenshots');
+}
+
+/**
+ * 默认截取窗口:VISION_DEFAULT_TARGET 配置则用它(与 target 同语义,进程名或窗口标题),否则 null(=全屏)。
+ * 纯函数可单测,与 defaultShotsDir 同模式;captureScreen 里经 deps.defaultTarget 注入可绕开真实 env。
+ */
+export function defaultTarget(env = process.env) {
+  return (env.VISION_DEFAULT_TARGET || '').trim() || null;
 }
 
 function makeShotsDir(shotsRoot) {
@@ -464,8 +473,12 @@ export async function captureMac({ execFileFn = execFileP, timeout = TIMEOUT, wi
 
 // --- target 解析:枚举窗口 → 模糊匹配 → 命中传 id / 未命中或枚举失败记 note → 降级全屏 ---
 // 枚举失败(如 wmctrl/swift 缺失、权限不足)与未命中都收敛为"note + 全屏",不抛错、不挂起。
+// 显式全屏标记(空串或 '全屏'/'fullscreen',大小写不敏感)直接走全屏,不枚举窗口(避免无谓开销)。
+const FULLSCREEN_TARGETS = new Set(['全屏', 'fullscreen']);
+
 async function resolveTarget(target, listWindowsFn) {
-  if (target == null || String(target).trim() === '') return { match: null };
+  const t = target == null ? '' : String(target).trim();
+  if (t === '' || FULLSCREEN_TARGETS.has(t.toLowerCase())) return { match: null };
   let windows;
   try {
     windows = await listWindowsFn();
@@ -478,10 +491,14 @@ async function resolveTarget(target, listWindowsFn) {
 }
 
 /**
- * 截取屏幕:全屏或指定窗口,返回 { b64, filePath, sizeBytes, mime, note? }。
+ * 截取屏幕:全屏或指定窗口,返回 { b64, filePath, sizeBytes, mime, note?, targetLabel? }。
  * target 为进程名或窗口标题(模糊匹配),找不到/枚举失败时回退全屏并带 note 说明原因。
+ * 不传 target(undefined/null)时按 deps.defaultTarget / 环境变量 VISION_DEFAULT_TARGET 解析:
+ * 配置了则默认截该程序窗口,未配置则全屏。显式传空串或 '全屏'/'fullscreen'(大小写不敏感)为显式全屏。
+ * targetLabel 记录实际命中的窗口(命中窗口的 title||process,全屏时 null),供上层提示"截的是哪个窗口"。
  * 截图保留在 shotsRoot(默认仓库根 .text-vision/screenshots),每次成功后 pruneShots 只留最近 MAX_SHOTS 张。
- * deps 可选,用于测试注入 mock 的 spawn/execFile/listWindows,以及 shotsRoot(测试用临时目录避免污染仓库)。
+ * deps 可选,用于测试注入 mock 的 spawn/execFile/listWindows,以及 shotsRoot(测试用临时目录避免污染仓库)、
+ * defaultTarget(注入默认窗口目标,绕开真实 env,如测试传 '' 强制无默认)。
  * platform 也可注入(默认 process.platform),让跨平台分派逻辑可在任意 CI 平台单测。
  */
 export async function captureScreen(deps = {}) {
@@ -490,9 +507,13 @@ export async function captureScreen(deps = {}) {
     const listWindowsFn = deps.listWindows ?? listWindows;
     const shotsRoot = deps.shotsRoot ?? defaultShotsDir();
     const platform = deps.platform ?? process.platform;
-    // target 解析提前到入口:命中传窗口 id,未命中/枚举失败带 note 走全屏(不抛错、不挂起)
-    const r = await resolveTarget(deps.target, listWindowsFn);
+    // target 解析提前到入口:显式传 target 用之;未传(null/undefined)回退默认 target(VISION_DEFAULT_TARGET),
+    // 仍无则全屏。命中传窗口 id,未命中/枚举失败带 note 走全屏(不抛错、不挂起)。
+    // 注:注入 null 不会隔离环境(null ?? defaultTarget() 仍读 env),测试要强制"无默认"须注入空串 ''。
+    const target = deps.target ?? deps.defaultTarget ?? defaultTarget();
+    const r = await resolveTarget(target, listWindowsFn);
     const windowId = r.match?.id ?? null;
+    const targetLabel = r.match?.title || r.match?.process || null;
     let result;
     if (platform === 'win32') result = await captureWindows({ ...deps, listWindowsFn, shotsRoot, windowId });
     else if (platform === 'darwin') result = await captureMac({ ...deps, listWindowsFn, shotsRoot, windowId });
@@ -512,7 +533,7 @@ export async function captureScreen(deps = {}) {
     pruneShots(dirname(filePath), MAX_SHOTS);
     // 合并两处降级原因:窗口内部降级 note + target 解析降级 note(运行时路径无需脱敏,枚举错误已在上游脱敏)
     const note = [result.note, r.note].filter(Boolean).map(s => s.trim()).join(';') || undefined;
-    return { b64, filePath, sizeBytes: Buffer.byteLength(b64, 'base64'), mime, note };
+    return { b64, filePath, sizeBytes: Buffer.byteLength(b64, 'base64'), mime, note, targetLabel };
   } catch (err) {
     if (filePath) cleanupScreenShot(filePath); // 失败路径清理残留,避免截屏失败留下空文件
     // 底层实现(reject 自 captureWindows 等)已逐处脱敏,这里兜底未来回归:任何异常都以不含

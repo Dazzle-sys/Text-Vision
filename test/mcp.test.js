@@ -3,7 +3,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createServer } from '../src/index.js';
 import { repoRoot } from '../src/repo-root.js';
 
@@ -30,7 +32,15 @@ async function startServer(overrides = {}) {
     describe: async (path) => ({ ok: true, text: `描述:${path}` }),
     ocr: async (path) => ({ ok: true, text: `OCR:${path}` }),
     capture: async ({ target }) => ({ b64: 'aGk=', mime: 'image/png' }),
-    describeBase64: async (b64, mime, focus) => ({ ok: true, text: `截图:${focus}` }),
+    // 参数位断言:index.js 调 describeBase64 时第 4 位 cfg 必须显式 undefined 占位、第 5 位 source 带来源
+    // (mock 无 filePath 时是纯 '截屏';capture 带 filePath 时是 "截屏 <截图路径>")、第 6 位 sourceLabel='截屏'
+    // (成功日志纯标签)。防未来把 source 误放 cfg 位(参数错位回归会溜过 3 参 mock)——真实链路由下方专用用例兜底
+    describeBase64: async (b64, mime, focus, cfg, source, sourceLabel) => {
+      assert.equal(cfg, undefined, 'cfg 必须显式 undefined 占位');
+      assert.ok(String(source).startsWith('截屏'), 'source 应以"截屏"开头,可带截图文件路径');
+      assert.equal(sourceLabel, '截屏', 'sourceLabel 应为截屏(成功日志纯标签)');
+      return { ok: true, text: `截图:${focus}` };
+    },
     listWindows: async () => [],
     appendLog: async (event, detail) => { logs.push([event, detail]); },
     debugLog: () => {},
@@ -102,6 +112,24 @@ test('tools/call screen_capture:带 target → focus 提示指定的窗口', asy
   assert.deepEqual(c.logs, [], '未降级时不应写日志');
 });
 
+test('tools/call screen_capture:未传 target 且 capture 返回 targetLabel(默认 target 命中)→ focus 提示真实窗口名', async () => {
+  const c = await startServer({
+    capture: async () => ({ b64: 'aGk=', mime: 'image/png', targetLabel: 'Google Chrome' })
+  });
+  const res = await c.request('tools/call', { name: 'screen_capture', arguments: {} });
+  assert.equal(res.result.content[0].text, '截图:指定的窗口:Google Chrome');
+  assert.equal(res.result.isError, false);
+});
+
+test('tools/call screen_capture:显式 target 时 focus 用 target 原文(忽略 targetLabel)→ 契约固化', async () => {
+  const c = await startServer({
+    capture: async () => ({ b64: 'aGk=', mime: 'image/png', targetLabel: 'Google Chrome' })
+  });
+  const res = await c.request('tools/call', { name: 'screen_capture', arguments: { target: 'chrome' } });
+  assert.equal(res.result.content[0].text, '截图:指定的窗口:chrome');
+  assert.equal(res.result.isError, false);
+});
+
 test('tools/call screen_capture:返回 filePath → 提示截图保存位置(完整路径方便打开)', async () => {
   const c = await startServer({
     capture: async () => ({ b64: 'aGk=', mime: 'image/png', filePath: join(repoRoot, '.text-vision', 'screenshots', 'shot-123.jpeg') })
@@ -109,6 +137,24 @@ test('tools/call screen_capture:返回 filePath → 提示截图保存位置(完
   const res = await c.request('tools/call', { name: 'screen_capture', arguments: {} });
   assert.match(res.result.content[0].text, /截图已保存到 .*shot-123\.jpeg/);
   assert.ok(res.result.content[0].text.includes(join(repoRoot, '.text-vision', 'screenshots', 'shot-123.jpeg')), '应返回完整绝对路径');
+});
+
+test('tools/call screen_capture:mock capture 带 filePath → source 拼上截图路径,sourceLabel 保持纯标签', async () => {
+  // 失败日志要能定位到是哪个截图文件:index.js 把 source 拼成 "截屏 <filePath>",成功日志用 sourceLabel 纯标签
+  const filePath = join(repoRoot, '.text-vision', 'screenshots', 'shot-456.jpeg');
+  const c = await startServer({
+    capture: async () => ({ b64: 'aGk=', mime: 'image/png', filePath }),
+    describeBase64: async (b64, mime, focus, cfg, source, sourceLabel) => {
+      assert.equal(cfg, undefined, 'cfg 必须显式 undefined 占位');
+      assert.equal(source, `截屏 ${filePath}`, 'source 应拼上截图落盘路径,供失败日志定位');
+      assert.equal(sourceLabel, '截屏', 'sourceLabel 应为纯标签,不含路径');
+      return { ok: true, text: '截图:ok' };
+    }
+  });
+  const res = await c.request('tools/call', { name: 'screen_capture', arguments: {} });
+  assert.equal(res.result.isError, false);
+  // capture 带 filePath 时返回文本还会拼 [截图已保存到 ...],用前缀断言只看描述文本
+  assert.ok(res.result.content[0].text.startsWith('截图:ok'), '描述文本应为截图:ok');
 });
 
 test('tools/call screen_capture:返回 note → 文本含[提示]且 appendLog 落盘 + 日志', async () => {
@@ -211,6 +257,7 @@ test('tools/call 兜底:实现抛含本机路径的异常 → 统一错误形态
   assert.match(res.result.content[0].text, /描述图片失败/);
   assert.ok(!res.result.content[0].text.includes('C:\\Users\\someone'), '本机路径应被脱敏');
   assert.match(res.result.content[0].text, /\[本地路径\]/);
+  assert.ok(c.logs.some(([ev, detail]) => ev === 'tool_error' && detail.includes('描述图片失败')), '兜底异常应落盘 tool_error');
 });
 
 test('tools/call screen_capture:capture 返回 undefined → 明确错误而非 TypeError', async () => {
@@ -231,4 +278,45 @@ test('tools/call screen_capture:capture 抛含路径异常 → 兜底统一错�
   assert.match(res.result.content[0].text, /截屏失败/);
   assert.ok(!res.result.content[0].text.includes('C:\\Users\\someone'), '本机路径应被脱敏');
   assert.match(res.result.content[0].text, /\[本地路径\]/);
+  assert.ok(c.logs.some(([ev, detail]) => ev === 'tool_error' && detail.includes('截屏失败')), '兜底异常应落盘 tool_error');
+});
+
+test('tools/call screen_capture:真实 describeImageFromBase64 链路(不注入 mock)→ 描述成功', async () => {
+  // 回归防护:index.js 调 describeBase64 时第 4 参 cfg 必须显式 undefined、第 5 参 source='截屏'。
+  // 若 cfg 被字符串污染,describeImageFromBase64 会把 cfg 当字符串、读不到 apiKey,误报"视觉引擎未配置",
+  // 本用例 isError 断言即失败——此前各用例全注入 3 参 mock,从未覆盖真实参数契约,该回归会溜过 CI。
+  const saved = {};
+  for (const k of ['VISION_API_BASE', 'VISION_API_KEY', 'VISION_MODEL', 'VISION_LOG_FILE']) saved[k] = process.env[k];
+  const logDir = mkdtempSync(join(tmpdir(), 'tv-mcp-log-'));
+  const REAL_FETCH = globalThis.fetch;
+  try {
+    process.env.VISION_API_BASE = 'https://mock.example.com/v1';
+    process.env.VISION_API_KEY = 'sk-test-abcdefghij';
+    process.env.VISION_MODEL = 'mock-model';
+    process.env.VISION_LOG_FILE = join(logDir, 'log.txt'); // 真实 appendLog 落临时目录,不污染仓库日志
+    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: '屏幕上有任务栏和窗口' } }] }) });
+    const server = createServer({
+      describe: async () => ({ ok: true, text: 'x' }),
+      ocr: async () => ({ ok: true, text: 'x' }),
+      capture: async () => ({ b64: 'aGk=', mime: 'image/png' }),
+      listWindows: async () => [],
+      appendLog: () => {},
+      debugLog: () => {}
+    });
+    const [clientT, serverT] = InMemoryTransport.createLinkedPair();
+    await Promise.all([clientT.start(), server.connect(serverT)]);
+    const c = makeClient(clientT);
+    await c.request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1.0.0' } });
+    c.notify('notifications/initialized');
+    const res = await c.request('tools/call', { name: 'screen_capture', arguments: {} });
+    assert.equal(res.result.isError, false);
+    assert.match(res.result.content[0].text, /屏幕上有任务栏和窗口/);
+  } finally {
+    for (const k of ['VISION_API_BASE', 'VISION_API_KEY', 'VISION_MODEL', 'VISION_LOG_FILE']) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+    globalThis.fetch = REAL_FETCH;
+    try { rmSync(logDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  }
 });

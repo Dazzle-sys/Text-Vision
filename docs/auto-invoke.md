@@ -86,15 +86,15 @@ echo '{"tool_name":"Read","cwd":"<本仓库绝对路径>","tool_input":{"file_pa
 
 - 本机文本模型看不懂图片,遇到图片/截图/屏幕/界面/UI/图表/OCR 必须调 `text-vision` 工具,不直接读图片二进制
 - **用户粘贴/拖入的图片已落盘为本地文件**,消息里带路径/文件名线索;**不要回复"我不支持看图"、不要索要路径**,自行定位后调 `describe_image(path)`
-- 验证码/报错/文档截图优先 `ocr_image(path)`;当前屏幕用 `screen_capture(focus?)`
+- 验证码/报错/文档截图优先 `ocr_image(path)`;当前屏幕用 `screen_capture(focus?)`,截指定程序窗口先 `list_windows()` 再 `screen_capture(target='进程名或标题')`
 
 ### 2.2 `AGENTS.md`(OpenCode / Cursor / Gemini CLI / Codex 等通用,放项目根)
 
 成品模板见 [`templates/AGENTS.md`](../templates/AGENTS.md),直接复制到项目根即可。核心要求:
 
 - Text-only model cannot see images; on any image / screenshot / screen / UI / OCR, MUST call a `text-vision` tool
-- **User pasted / dragged an image → it is already a local file**; do NOT reply "I can't see images" and do NOT ask for the path — locate the file (use the path in the message, or search temp / project dirs for recent images) and call `describe_image(path)`
-- Prefer `ocr_image(path)` for captchas / error / document screenshots; use `screen_capture(focus?)` for the current screen
+- **User pasted or dropped an image → it is already a local file**; do NOT reply "I can't see images" and do NOT ask for the path — locate the file (use the path in the message, or search temp / project dirs for recent images) and call `describe_image(path)`
+- Prefer `ocr_image(path)` for captchas / error / document screenshots; use `screen_capture(focus?)` for the current screen, or `list_windows()` + `screen_capture(target=…)` for a specific program window
 
 > 为什么 AGENTS.md 给英文?OpenCode/Cursor 的规则文件常被模型作为指令直接执行,英文命中率更稳;CLAUDE.md 因本仓库读者以中文为主保留中文。两者均可按自己习惯改。
 

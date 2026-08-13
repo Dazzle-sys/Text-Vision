@@ -124,14 +124,15 @@ args = ["text-vision/src/index.js"]
         "VISION_API_BASE": "https://open.bigmodel.cn/api/paas/v4",
         "VISION_API_KEY": "你的GLM-4V的Key",
         "VISION_MODEL": "glm-4v-plus",
-        "VISION_TIMEOUT": "60000"
+        "VISION_TIMEOUT": "60000",
+        "VISION_LOG_FILE": ""
       }
     }
   }
 }
 ```
 
-支持的全部环境变量见 README「配置」一节(`VISION_*` 前缀)。也可以不写 `env` 字段,直接在终端导出后启动(如 `export VISION_API_KEY=...`),二选一即可。
+支持的全部环境变量见 README「配置」一节(`VISION_*` 前缀)。也可以不写 `env` 字段,直接在终端导出后启动(如 `export VISION_API_KEY=...`),二选一即可。其中 `VISION_LOG_FILE` 可选:指定窗口失败/降级时的诊断日志文件路径,不填则写本仓库根 `.text-vision/log.txt`,用于排查"为什么没用指定窗口"。
 
 ## 7. 换机器 / 换目录
 
@@ -147,7 +148,7 @@ MCP 配置里**唯一需要改的就是 `args` 里的启动路径**。复制项�
 |---|---|
 | MCP server 显示连接失败/启动报错 | 先手动跑 `node text-vision/src/index.js` 确认能启动;多数是 Node 版本 < 20 或 `npm install` 没执行 |
 | 提示 node 找不到(Windows) | node 不在 PATH,把 `command` 改为 node 完整路径。注意 JSON 里反斜杠必须写成 `\\`,即 `"command": "C:\\Program Files\\nodejs\\node.exe"`;或直接用正斜杠 `"command": "C:/Program Files/nodejs/node.exe"`(node 也能识别),更省事 |
-| 工具里看不到三个工具 | 配置改完没重启工具;或 server 名与配置里不一致 |
+| 工具里看不到四个工具 | 配置改完没重启工具;或 server 名与配置里不一致 |
 | 调用工具提示"视觉引擎未配置" | 没设 `VISION_*` 环境变量,按 [第 6 节](#6-用环境变量配置推荐) 在 MCP 配置 `env` 字段注入(或先 `export`) |
 | 图片路径传相对路径找不到 | 相对路径按 **MCP server 的启动目录**解析,建议传绝对路径 |
 | 模型回复"我不支持看图 / 请提供图片路径" | 规则模板未覆盖"用户粘贴/拖入图片"场景。按 docs/auto-invoke.md 2.x 更新项目根 AGENTS.md/CLAUDE.md,加入"粘贴图片→自行定位落盘文件→调 describe_image"指引 |

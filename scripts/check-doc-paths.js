@@ -5,6 +5,7 @@
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { WIN_PATH_RE, UNIX_PATH_RE } from '../src/redact.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const docsDir = join(root, 'docs');
@@ -24,19 +25,14 @@ function isWhitelisted(line) {
   return /:\/\//.test(line) || /Program Files/.test(line) || /node\.exe/.test(line);
 }
 
-// 疑似绝对路径识别:
-//  - winPath:Windows 盘符路径(C:\Users\xx 或 C:/Users/xx)
-//  - unixPath:Unix 绝对路径。限定常见根目录词开头(/usr/local/bin、/home/user/file),
-//    避免把中文句子里用斜杠分隔的词(429/408/500、工具注册/schema/端到端)误当路径。
-//    (?<!:) 排除 URL 的 ://(URL 行虽已被 isWhitelisted 整行放行,这里双保险)。
-const winPath = /[A-Za-z]:[\\/][^\s"'()]*/;
-const unixPath = /(?<!:)\/(?:usr|home|etc|var|opt|tmp|mnt|root|dev|run|bin|sbin|lib|srv|media)(?:\/[^\s"'()]*)?/;
-
+// 疑似绝对路径识别复用 src/redact.js 的同一组正则(WIN_PATH_RE / UNIX_PATH_RE),避免双源漂移:
+//  - Windows 盘符路径(C:\Users\xx 或 C:/Users/xx)
+//  - Unix 绝对路径,限定常见根目录词开头,避免把中文句子里用斜杠分隔的词误当路径
 for (const file of targets) {
   const lines = readFileSync(join(root, file), 'utf8').split(/\r?\n/);
   lines.forEach((line, i) => {
     if (isWhitelisted(line)) return;
-    if (winPath.test(line) || unixPath.test(line)) {
+    if (WIN_PATH_RE.test(line) || UNIX_PATH_RE.test(line)) {
       console.log(`${file}:${i + 1}: ${line.trim()}`);
     }
   });

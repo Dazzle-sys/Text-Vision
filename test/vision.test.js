@@ -3,7 +3,7 @@
 // 全部通过替换全局 fetch 模拟网络,不消耗视觉 API。
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { describeImageFromBase64, readLocalImage, describeImage, ocrImage, __setRetrySleepForTest } from '../src/text-vision-client.js';
+import { describeImageFromBase64, readLocalImage, describeImage, ocrImage } from '../src/text-vision-client.js';
 
 // 测试注入用配置(避免依赖真实环境变量)
 const CFG = {
@@ -13,7 +13,8 @@ const CFG = {
   timeoutMs: 5000,
   maxImageMB: 10,
   maxTokens: null, // 未配置,由 callVision 按场景取默认
-  maxRetries: 1
+  maxRetries: 1,
+  retrySleep: () => Promise.resolve() // 重试退避即时返回,避免 429/5xx 用例真等几百 ms
 };
 
 // 替换全局 fetch 并记录调用;调用方用 finally 恢复
@@ -42,15 +43,12 @@ beforeEach(() => {
   process.env.VISION_API_BASE = 'https://mock.example.com/v1';
   process.env.VISION_API_KEY = 'sk-test-abcdefghij';
   process.env.VISION_MODEL = 'mock-model';
-  // 重试退避注入即时实现,避免 429/5xx 重试用例真等几百 ms
-  __setRetrySleepForTest(() => Promise.resolve());
 });
 afterEach(() => {
   for (const k of VISION_ENV) {
     if (savedEnv[k] === undefined) delete process.env[k];
     else process.env[k] = savedEnv[k];
   }
-  __setRetrySleepForTest(null); // 恢复真实 setTimeout
 });
 
 // ---------------------------------------------------------------------------
@@ -223,6 +221,29 @@ test('错误响应体回显本机 apiKey → 替换为 [REDACTED]', async () => 
   } finally { s.restore(); }
 });
 
+test('单行 JSON 错误体回显 "Bearer <JWT>" → 令牌被脱敏(带 scheme 前缀不再绕过)', async () => {
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
+  const leaky = JSON.stringify({ error: { message: 'invalid_token', raw: `Bearer ${jwt}` } });
+  const s = stubFetch(() => errRes(401, leaky));
+  try {
+    const r = await describeImageFromBase64(B64, 'image/png', null, CFG);
+    assert.equal(r.ok, false);
+    assert.ok(!r.text.includes(jwt), '完整 JWT 不应泄漏');
+    assert.ok(!r.text.includes(jwt.split('.')[1]), 'JWT payload 段不应泄漏');
+    assert.match(r.text, /\[REDACTED\]/);
+  } finally { s.restore(); }
+});
+
+test('JSON 错误体在敏感字段名(access_token)下回显裸 JWT → 值被脱敏', async () => {
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
+  const s = stubFetch(() => errRes(401, JSON.stringify({ error: { access_token: jwt } })));
+  try {
+    const r = await describeImageFromBase64(B64, 'image/png', null, CFG);
+    assert.ok(!r.text.includes(jwt.split('.')[1]), 'JWT payload 段不应泄漏');
+    assert.match(r.text, /\[REDACTED\]/);
+  } finally { s.restore(); }
+});
+
 test('非 JSON 的凭据行(Authentication: Bearer sk-xxx)整行丢弃', async () => {
   const leaky = 'Something went wrong\nAuthentication: Bearer sk-test-abcdefghij\nTry again';
   const s = stubFetch(() => errRes(500, leaky));
@@ -243,6 +264,24 @@ test('脱敏后若整段只剩敏感信息 → 提示已隐藏', async () => {
     assert.equal(r.ok, false);
     assert.ok(!r.text.includes('sk-test-abcdefghij'));
     assert.match(r.text, /已隐藏/);
+  } finally { s.restore(); }
+});
+
+test('错误响应体为空 → 报"响应体为空",不误标成"敏感信息已隐藏"', async () => {
+  const s = stubFetch(() => errRes(500, ''));
+  try {
+    const r = await describeImageFromBase64(B64, 'image/png', null, CFG);
+    assert.equal(r.ok, false);
+    assert.match(r.text, /响应体为空/);
+    assert.ok(!r.text.includes('已隐藏'), '空 body 不应被误标成敏感信息已隐藏');
+  } finally { s.restore(); }
+});
+
+test('错误响应体为空白字符 → 同样报"响应体为空"', async () => {
+  const s = stubFetch(() => errRes(500, '   \n\t  '));
+  try {
+    const r = await describeImageFromBase64(B64, 'image/png', null, CFG);
+    assert.match(r.text, /响应体为空/);
   } finally { s.restore(); }
 });
 

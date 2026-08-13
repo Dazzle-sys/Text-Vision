@@ -6,17 +6,17 @@ import { writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runHook, applyHookDefaults } from '../hooks/read-image-hook.js';
-import { __setRetrySleepForTest } from '../src/text-vision-client.js';
 
 const REAL_FETCH = globalThis.fetch;
 
-const VISION_ENV = ['VISION_API_BASE', 'VISION_API_KEY', 'VISION_MODEL', 'VISION_TIMEOUT', 'VISION_MAX_IMAGE_MB', 'VISION_HOOK_MODE'];
+const VISION_ENV = ['VISION_API_BASE', 'VISION_API_KEY', 'VISION_MODEL', 'VISION_TIMEOUT', 'VISION_MAX_IMAGE_MB', 'VISION_HOOK_MODE', 'VISION_MAX_RETRIES'];
 const saved = {};
 beforeEach(() => {
   for (const k of VISION_ENV) saved[k] = process.env[k];
   for (const k of VISION_ENV) delete process.env[k];
-  // 重试退避注入即时实现,避免"视觉调用失败"用例(500 重试一次)真等几百 ms
-  __setRetrySleepForTest(() => Promise.resolve());
+  // 关闭重试:hook 走 describeImage(无 cfg 注入点,退避用真实 setTimeout),
+  // 避免"视觉调用失败"用例(500 重试一次)真等几百 ms
+  process.env.VISION_MAX_RETRIES = '0';
 });
 afterEach(() => {
   for (const k of VISION_ENV) {
@@ -24,7 +24,6 @@ afterEach(() => {
     else process.env[k] = saved[k];
   }
   globalThis.fetch = REAL_FETCH;
-  __setRetrySleepForTest(null); // 恢复真实 setTimeout
 });
 
 const okRes = text => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: text } }] }) });

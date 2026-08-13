@@ -2,18 +2,11 @@
 // MCP server 和 PreToolUse hook 各自独立进程复用本文件,视觉逻辑只有一份。
 import { readFileSync, statSync } from 'node:fs';
 import { resolve, extname, isAbsolute } from 'node:path';
+import { debugLog as log } from './log.js';
 
 // ---------------------------------------------------------------------------
-// 调试日志:DEBUG_VISION=1 时打印到 stderr(不影响 MCP stdout 协议)
+// 调试日志:DEBUG_VISION=1 时打印到 stderr(不影响 MCP stdout 协议),复用 log.js 的 debugLog
 // ---------------------------------------------------------------------------
-function isDebug() {
-  const v = process.env.DEBUG_VISION;
-  return v === '1' || v === 'true';
-}
-
-function log(...args) {
-  if (isDebug()) console.error('[text-vision]', ...args);
-}
 
 // ---------------------------------------------------------------------------
 // 配置读取:全部来自环境变量(VISION_*),环境变量在每次 loadConfig 时实时读取,
@@ -131,8 +124,10 @@ const SENSITIVE_RE = /(?:\bauthorization|\bapi[_-]?key|\bx-api-key|\bsecret|\bcr
 
 // JSON 错误体中的敏感字段名(命中则整个字段值替换为 [REDACTED])
 const SENSITIVE_JSON_KEY = /^(authorization|token|access_token|refresh_token|id_token|api_token|auth_token|api_key|apikey|x-api-key|secret|credential|password)$/i;
-// 值形态明显是凭据:sk- 前缀或 JWT 三段结构(不覆盖普通长字符串,避免误删 "insufficient_quota" 这类错误码)
-const CRED_VALUE_RE = /^(sk-[A-Za-z0-9_-]{8,}|[A-Za-z0-9._~+/=-]{20,}\.[A-Za-z0-9._~+/=-]{20,}\.[A-Za-z0-9._~+/=-]{20,})$/i;
+// 值形态明显是凭据:sk- 前缀或 JWT 三段结构(不覆盖普通长字符串,避免误删 "insufficient_quota" 这类错误码)。
+// 允许可选 "Bearer " 等 scheme 前缀:第三方网关错误体常回显 "Bearer <jwt>" 而非裸令牌,
+// 锚定的正则若不容忍前缀,带前缀的值会原样漏过单行 JSON 脱敏
+const CRED_VALUE_RE = /^(?:(?:Bearer|Basic|Token)\s+)?(?:sk-[A-Za-z0-9_-]{8,}|[A-Za-z0-9._~+/=-]{20,}\.[A-Za-z0-9._~+/=-]{20,}\.[A-Za-z0-9._~+/=-]{20,})$/i;
 
 /** 递归脱敏 JSON 节点:敏感字段名→值整体替换;非敏感字段下"凭据形态"的字符串值→替换。 */
 function redactSensitiveJson(node) {
@@ -160,6 +155,9 @@ function sanitizeLine(line) {
 }
 
 function sanitizeDetail(detail, apiKey = '') {
+  // 空响应体(HTTP 4xx/5xx 但 body 为空/全空白)直接标明"空",与"整段被脱敏"区分开,
+  // 否则会把空响应误报成"敏感信息已隐藏",带偏排障方向
+  if (!String(detail).trim()) return '(响应体为空)';
   let out = detail;
   if (apiKey && apiKey.length >= 8) out = out.split(apiKey).join('[REDACTED]');
   const sanitized = out.split(/\r?\n/).map(sanitizeLine).filter(l => l !== null).join('\n');
@@ -178,10 +176,8 @@ export function redactUrlCreds(u) {
 // 注意:每次重试独立受 timeoutMs 约束,最坏总耗时 ≈ (maxRetries+1) × timeoutMs + 退避
 // ---------------------------------------------------------------------------
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
-// 重试退避等待。默认真实 setTimeout;测试经 __setRetrySleepForTest 注入即时实现,避免用例真等几百 ms
-let retrySleep = ms => new Promise(r => setTimeout(r, ms));
-/** 测试专用钩子:替换重试退避等待实现(传 null/undefined 恢复真实 setTimeout)。勿在生产代码调用。 */
-export function __setRetrySleepForTest(fn) { retrySleep = fn || (ms => new Promise(r => setTimeout(r, ms))); }
+// 重试退避等待,默认真实 setTimeout;测试可经 cfg.retrySleep 注入即时实现(与 cfg 注入同模式),避免用例真等几百 ms
+const realRetrySleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function callVision(b64, mime, promptText, ocr, cfg) {
   cfg = cfg || loadConfig();
@@ -212,6 +208,7 @@ async function callVision(b64, mime, promptText, ocr, cfg) {
   };
 
   const maxRetries = Number.isFinite(cfg.maxRetries) ? cfg.maxRetries : 1;
+  const sleep = cfg.retrySleep ?? realRetrySleep;
   const startedAt = Date.now();
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const r = await tryOnce(url, body, cfg);
@@ -219,7 +216,7 @@ async function callVision(b64, mime, promptText, ocr, cfg) {
     if (retryable) {
       log(`HTTP ${r.status} 可重试,重试(${attempt + 1}/${maxRetries})`);
       // 固定间隔 + 随机抖动,避免多客户端/多工具同刻重试造成羊群效应
-      await retrySleep(500 * (attempt + 1) + Math.floor(Math.random() * 250));
+      await sleep(500 * (attempt + 1) + Math.floor(Math.random() * 250));
       continue;
     }
     log(`${r.ok ? '成功' : '失败'} 耗时=${Date.now() - startedAt}ms${r.status ? ` HTTP=${r.status}` : ''}`);

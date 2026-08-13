@@ -9,6 +9,7 @@
 可用工具:
 - `describe_image(path, focus?)` — 描述图片(主体/颜色/布局/图中文字)
 - `ocr_image(path)` — 提取图中文字,保留排版
-- `screen_capture(focus?)` — 截取当前屏幕并描述
+- `list_windows()` — 列出当前打开的可见窗口(标题 + 进程名)
+- `screen_capture(focus?, target?)` — 截取屏幕并描述。看当前屏幕直接 `screen_capture()`;要截**指定程序窗口**(避免其他窗口遮挡),先 `list_windows()` 拿窗口清单,再 `screen_capture(target='进程名或标题')`
 
 若已配置 PreToolUse hook(见本项目 docs/auto-invoke.md),读图会自动被拦截转成描述,本规则作为双保险。

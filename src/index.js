@@ -1,12 +1,14 @@
 // text-vision:给无视觉文本模型(DeepSeek 等)提供视觉能力的 MCP server
-// 工具:describe_image / ocr_image / screen_capture(全部返回纯文字)
+// 工具:describe_image / ocr_image / screen_capture / list_windows(全部返回纯文字)
 // Claude Code、OpenCode 及其他支持 MCP 的工具均可接入。
 import { createRequire } from 'node:module';
 import { McpServer } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import * as z from 'zod/v4';
 import { describeImage, describeImageFromBase64, ocrImage, SUPPORTED_EXTS_TEXT } from './text-vision-client.js';
-import { captureScreen, cleanupScreenShot } from './capture-screen.js';
+import { captureScreen } from './capture-screen.js';
+import { listWindows } from './list-windows.js';
+import { appendLog, debugLog } from './log.js';
 import { isDirectRun } from './is-direct-run.js';
 
 const SERVER_NAME = 'text-vision';
@@ -22,8 +24,10 @@ export function createServer(deps = {}) {
   const describe = deps.describe ?? describeImage;
   const ocr = deps.ocr ?? ocrImage;
   const capture = deps.capture ?? captureScreen;
-  const cleanup = deps.cleanup ?? cleanupScreenShot;
   const describeBase64 = deps.describeBase64 ?? describeImageFromBase64;
+  const listWindowsFn = deps.listWindows ?? listWindows;
+  const appendLogFn = deps.appendLog ?? appendLog;
+  const debugLogFn = deps.debugLog ?? debugLog;
 
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 
@@ -74,23 +78,53 @@ export function createServer(deps = {}) {
   server.registerTool(
     'screen_capture',
     {
-      description: '截取当前屏幕(全部显示器,可能含敏感信息)并用视觉模型描述画面,截屏内容会发送到第三方视觉 API 处理。适合查看当前应用界面、UI 状态。',
+      description: '截取屏幕(全屏或指定程序窗口)并用视觉模型描述画面,截屏内容会发送到第三方视觉 API 处理。适合查看当前应用界面、UI 状态。传 target(进程名或窗口标题,模糊匹配)可只截取该程序窗口,避免其他窗口遮挡影响识别质量;可用 list_windows 先查看当前有哪些窗口可选。',
       inputSchema: z.object({
-        focus: z.string().optional().describe('关注的要点,如"当前界面布局""错误弹窗内容"')
+        focus: z.string().optional().describe('关注的要点,如"当前界面布局""错误弹窗内容"'),
+        target: z.string().optional().describe('要截取的程序/窗口:进程名或窗口标题(如 chrome、未命名 - 记事本),模糊匹配。不传则截全部显示器全屏;找不到匹配窗口时自动回退全屏并提示')
       })
     },
-    async ({ focus }) => {
+    async ({ focus, target }) => {
       let shot;
       try {
-        shot = await capture();
-        const r = await describeBase64(shot.b64, shot.mime, focus || '当前屏幕/UI 界面');
-        const extra = r.ok ? '\n\n[截图已完成描述,临时文件已自动清理。如需保留截图,请用系统截屏工具。]' : '';
-        return textResult({ ok: r.ok, text: r.text + extra });
+        shot = await capture({ target });
+        // 降级/未命中提示:截图成功、视觉请求前就写日志,保证即使后续描述失败,降级原因也已落盘 + stderr
+        if (shot?.note) {
+          // await 降级日志:未来 appendLog 若改异步实现,也保证降级原因先落盘再继续;失败仍静默,不拖垮主流程
+          try { await appendLogFn('screen_capture_degrade', shot.note); } catch { /* 日志失败静默 */ }
+          debugLogFn('指定窗口截图降级:', shot.note);
+        }
+        const r = await describeBase64(shot.b64, shot.mime, focus || (target ? `指定的窗口:${target}` : '当前屏幕/UI 界面'));
+        // 描述成功才把降级提示拼进返回文本;描述失败时文本是错误文案,note 已通过日志(文件+stderr)传达
+        const hint = r.ok && shot?.note ? `\n\n[提示] ${shot.note}` : '';
+        // 截图保留在仓库 .text-vision/screenshots(最近 20 张),直接给完整路径方便打开(运行时输出,不入提交)
+        const saveHint = r.ok && shot?.filePath ? `\n\n[截图已保存到 ${shot.filePath},可打开查看;仅保留最近 20 张,超出自动清理]` : '';
+        return textResult({ ok: r.ok, text: r.text + hint + saveHint });
       } catch (err) {
         return textResult({ ok: false, text: `截屏失败: ${err?.message ?? err}` });
-      } finally {
-        // 用完即删,避免长时间会话在临时目录堆积 text-vision-shot-*.png
-        if (shot?.filePath) cleanup(shot.filePath);
+      }
+    }
+  );
+
+  server.registerTool(
+    'list_windows',
+    {
+      description: '列出当前打开的可见窗口(标题 + 进程名),供选择 screen_capture 的 target。纯文本模型看不到屏幕,截指定窗口前先调用本工具拿到窗口清单,再填 screen_capture(target)。',
+      inputSchema: z.object({})
+    },
+    async () => {
+      try {
+        const windows = await listWindowsFn();
+        if (!windows.length) {
+          return textResult({ ok: false, text: '没有枚举到可见窗口。可能原因:平台工具缺失(Windows 需已登录桌面会话 / macOS 未授权屏幕录制 / Linux 未装 wmctrl)或当前确实没有打开的窗口。' });
+        }
+        const lines = windows.map(w => {
+          const title = w.title; // 窗口标题原样展示(可能含本机文件路径,运行时输出,不入提交)
+          return `- ${title}${w.process ? ` (进程:${w.process})` : ''}`;
+        });
+        return textResult({ ok: true, text: `当前可见窗口(${windows.length}个):\n${lines.join('\n')}` });
+      } catch (err) {
+        return textResult({ ok: false, text: `枚举窗口失败: ${err?.message ?? err}` });
       }
     }
   );

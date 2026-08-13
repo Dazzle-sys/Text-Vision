@@ -3,6 +3,9 @@
 // 全部通过替换全局 fetch 模拟网络,不消耗视觉 API。
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { describeImageFromBase64, readLocalImage, describeImage, ocrImage } from '../src/text-vision-client.js';
 
 // 测试注入用配置(避免依赖真实环境变量)
@@ -36,19 +39,26 @@ const REAL_FETCH = globalThis.fetch;
 afterEach(() => { globalThis.fetch = REAL_FETCH; }); // 兜底恢复,避免用例残留替换
 
 // describeImage / ocrImage 内部走 loadConfig()(读环境变量),这里统一设置便于这两个用例
-const VISION_ENV = ['VISION_API_BASE', 'VISION_API_KEY', 'VISION_MODEL'];
+// VISION_LOG_FILE 同样指向每次用例独立的临时目录,避免测试把日志写进仓库 .text-vision/log.txt
+const VISION_ENV = ['VISION_API_BASE', 'VISION_API_KEY', 'VISION_MODEL', 'VISION_LOG_FILE', 'VISION_LOG_SUCCESS'];
 const savedEnv = {};
+let logDir = '';
 beforeEach(() => {
   for (const k of VISION_ENV) savedEnv[k] = process.env[k];
   process.env.VISION_API_BASE = 'https://mock.example.com/v1';
   process.env.VISION_API_KEY = 'sk-test-abcdefghij';
   process.env.VISION_MODEL = 'mock-model';
+  logDir = mkdtempSync(join(tmpdir(), 'text-vision-test-log-'));
+  process.env.VISION_LOG_FILE = join(logDir, 'log.txt');
+  // 清除外部环境可能设的 VISION_LOG_SUCCESS,保证"成功默认写日志"用例不受 ambient 环境(如 CI 全局设 0)影响
+  delete process.env.VISION_LOG_SUCCESS;
 });
 afterEach(() => {
   for (const k of VISION_ENV) {
     if (savedEnv[k] === undefined) delete process.env[k];
     else process.env[k] = savedEnv[k];
   }
+  try { rmSync(logDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
 });
 
 // ---------------------------------------------------------------------------
@@ -328,5 +338,155 @@ test('ocrImage 走 OCR 提示词(mock fetch 校验请求体)', async () => {
     const body = JSON.parse(s.calls[0].opts.body);
     assert.match(body.messages[1].content[0].text, /提取图中所有文字/);
     assert.equal(body.max_tokens, 4096, 'OCR 默认更长输出上限');
+  } finally { s.restore(); }
+});
+
+// ---------------------------------------------------------------------------
+// 日志落盘:视觉调用失败必写、成功默认写(VISION_LOG_SUCCESS=0 关闭),写入 VISION_LOG_FILE
+// ---------------------------------------------------------------------------
+test('HTTP 失败 → 写 [vision_failed],含 HTTP 状态与模型', async () => {
+  const s = stubFetch(() => errRes(400, 'bad request'));
+  try {
+    await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
+    assert.match(content, /\[vision_failed\]/);
+    assert.match(content, /HTTP 400/);
+    assert.match(content, /模型=mock-model/);
+  } finally { s.restore(); }
+});
+
+test('成功 → 默认写 [vision_ok],含耗时', async () => {
+  const s = stubFetch(() => okRes('ok'));
+  try {
+    await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
+    assert.match(content, /\[vision_ok\]/);
+    assert.match(content, /耗时=\d+ms/);
+  } finally { s.restore(); }
+});
+
+test('成功日志不拼路径:[vision_ok] 只含来源标签,不含被看图绝对路径', async () => {
+  const s = stubFetch(() => okRes('ok'));
+  try {
+    await describeImage('test/test.png'); // 走 readLocalImage,失败行会带绝对路径;成功行应只有 "描述"
+    const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
+    assert.match(content, /\[vision_ok\] 描述 成功/, '成功行应只含来源标签');
+    assert.ok(!content.includes('test.png'), '成功日志不应包含被看图路径');
+    assert.ok(!/^[A-Za-z]:\\/m.test(content), '成功日志不应包含盘符绝对路径');
+  } finally { s.restore(); }
+});
+
+test('VISION_LOG_SUCCESS=0 → 成功不写日志', async () => {
+  process.env.VISION_LOG_SUCCESS = '0';
+  const s = stubFetch(() => okRes('ok'));
+  try {
+    await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const logPath = join(logDir, 'log.txt');
+    // 成功日志被关闭时可能根本没创建日志文件,容忍存在/不存在两种状态,只要没有 [vision_ok] 行
+    const content = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
+    assert.ok(!content.includes('[vision_ok]'), '关闭成功日志后不应写 [vision_ok]');
+  } finally { s.restore(); }
+});
+
+test('文件不存在 → 写 [vision_failed],日志保留原始绝对路径便于定位', async () => {
+  await readLocalImage('C:\\Users\\someone\\Desktop\\no.png', 'prompt', false, CFG);
+  const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
+  assert.match(content, /\[vision_failed\]/);
+  assert.match(content, /找不到文件/);
+  assert.ok(content.includes('no.png'), '日志应记录原始路径(本地私有文件,不入 git)');
+});
+
+test('VISION_LOG_SUCCESS=0 → 失败仍写 [vision_failed](失败日志不受开关影响)', async () => {
+  process.env.VISION_LOG_SUCCESS = '0';
+  const s = stubFetch(() => errRes(400, 'bad request'));
+  try {
+    await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
+    assert.match(content, /\[vision_failed\]/, '失败日志不应受 VISION_LOG_SUCCESS=0 影响');
+    assert.ok(!content.includes('[vision_ok]'), '关闭成功日志后不应写 [vision_ok]');
+  } finally { s.restore(); }
+});
+
+test('base64 非法输入 → 写 [vision_failed],含来源标签', async () => {
+  await describeImageFromBase64('!!!not-base64!!!', 'image/png', null, CFG);
+  const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
+  assert.match(content, /\[vision_failed\]/);
+  assert.match(content, /base64 输入包含非法字符/);
+  assert.match(content, /截屏/, '失败行应含来源标签');
+});
+
+test('base64 超限 → 写 [vision_failed],不发请求', async () => {
+  // maxImageMB 是直接注入对象,不受 buildConfig 钳制;约 2KB 输入超过 0.001MB 限制即触发
+  const bigB64 = Buffer.alloc(2000).toString('base64');
+  await describeImageFromBase64(bigB64, 'image/png', null, { ...CFG, maxImageMB: 0.001 });
+  const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
+  assert.match(content, /\[vision_failed\]/);
+  assert.match(content, /图片过大/);
+});
+
+test('视觉引擎未配置 → 写 [vision_failed],含 模型=(空)', async () => {
+  const saved = {};
+  for (const k of ['VISION_API_BASE', 'VISION_API_KEY', 'VISION_MODEL']) saved[k] = process.env[k];
+  try {
+    delete process.env.VISION_API_BASE;
+    delete process.env.VISION_API_KEY;
+    delete process.env.VISION_MODEL;
+    await describeImageFromBase64(B64, 'image/png', null, undefined); // 不传 cfg,走 loadConfig 读 env
+    const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
+    assert.match(content, /\[vision_failed\]/);
+    assert.match(content, /视觉引擎未配置/);
+    assert.match(content, /模型=\(空\)/);
+  } finally {
+    for (const k of ['VISION_API_BASE', 'VISION_API_KEY', 'VISION_MODEL']) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
+});
+
+test('图片为空文件(stat 预检 0 字节)→ 写 [vision_failed]', async () => {
+  // 空文件(0 字节)在 stat 预检就被拦截,返回"图片内容为空"并写日志;
+  // 目录同理(statSync 的 size 为 0),指向目录时走的也是这条分支,而非读取错误分支
+  const emptyPng = join(logDir, 'empty.png');
+  writeFileSync(emptyPng, '');
+  try {
+    await readLocalImage(emptyPng, 'prompt', false, CFG);
+    const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
+    assert.match(content, /\[vision_failed\]/);
+    assert.match(content, /图片内容为空/);
+  } finally { rmSync(emptyPng, { force: true }); }
+});
+
+test('VISION_LOG_SUCCESS=false → 成功不写日志(false 与 0 等价)', async () => {
+  process.env.VISION_LOG_SUCCESS = 'false';
+  const s = stubFetch(() => okRes('ok'));
+  try {
+    await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const logPath = join(logDir, 'log.txt');
+    const content = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
+    assert.ok(!content.includes('[vision_ok]'), 'VISION_LOG_SUCCESS=false 后不应写 [vision_ok]');
+  } finally { s.restore(); }
+});
+
+test('describeImageFromBase64 传 source(带截图路径)→ 失败日志含原始路径', async () => {
+  // 截屏失败日志应能定位到是哪个截图文件:index.js 把 source 拼成 "截屏 <filePath>"
+  const s = stubFetch(() => errRes(400, 'bad request'));
+  try {
+    await describeImageFromBase64(B64, 'image/png', null, CFG, '截屏 C:\\shots\\shot-1.jpeg', '截屏');
+    const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
+    assert.match(content, /\[vision_failed\]/);
+    assert.match(content, /截屏/, '失败行应含来源标签');
+    assert.ok(content.includes('shot-1.jpeg'), '失败日志应含截图文件路径,便于定位是哪个截图');
+  } finally { s.restore(); }
+});
+
+test('describeImageFromBase64 传 source(带路径)+sourceLabel → 成功日志只含 sourceLabel,不含路径', async () => {
+  // 成功日志用 sourceLabel('截屏')而非带路径的 source,维持"成功行不含路径"承诺
+  const s = stubFetch(() => okRes('ok'));
+  try {
+    await describeImageFromBase64(B64, 'image/png', null, CFG, '截屏 C:\\shots\\shot-1.jpeg', '截屏');
+    const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
+    assert.match(content, /\[vision_ok\] 截屏 成功/, '成功日志应只含纯来源标签');
+    assert.ok(!content.includes('shot-1.jpeg'), '成功日志不应包含截图文件路径');
   } finally { s.restore(); }
 });

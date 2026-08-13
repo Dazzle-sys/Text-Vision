@@ -2,21 +2,25 @@
 // 成功/OCR 场景走真实代码路径(读 test/test.png + mock fetch);放行场景纯逻辑,不触网。
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, rmSync } from 'node:fs';
+import { writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runHook, applyHookDefaults } from '../hooks/read-image-hook.js';
 
 const REAL_FETCH = globalThis.fetch;
 
-const VISION_ENV = ['VISION_API_BASE', 'VISION_API_KEY', 'VISION_MODEL', 'VISION_TIMEOUT', 'VISION_MAX_IMAGE_MB', 'VISION_HOOK_MODE', 'VISION_MAX_RETRIES'];
+const VISION_ENV = ['VISION_API_BASE', 'VISION_API_KEY', 'VISION_MODEL', 'VISION_TIMEOUT', 'VISION_MAX_IMAGE_MB', 'VISION_HOOK_MODE', 'VISION_MAX_RETRIES', 'VISION_LOG_FILE'];
 const saved = {};
+let logDir = '';
 beforeEach(() => {
   for (const k of VISION_ENV) saved[k] = process.env[k];
   for (const k of VISION_ENV) delete process.env[k];
   // 关闭重试:hook 走 describeImage(无 cfg 注入点,退避用真实 setTimeout),
   // 避免"视觉调用失败"用例(500 重试一次)真等几百 ms
   process.env.VISION_MAX_RETRIES = '0';
+  // 日志同样指到每次用例独立的临时目录,避免测试把日志写进仓库 .text-vision/log.txt
+  logDir = mkdtempSync(join(tmpdir(), 'text-vision-hook-log-'));
+  process.env.VISION_LOG_FILE = join(logDir, 'log.txt');
 });
 afterEach(() => {
   for (const k of VISION_ENV) {
@@ -24,6 +28,7 @@ afterEach(() => {
     else process.env[k] = saved[k];
   }
   globalThis.fetch = REAL_FETCH;
+  try { rmSync(logDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
 });
 
 const okRes = text => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: text } }] }) });

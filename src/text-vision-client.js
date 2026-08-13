@@ -2,7 +2,7 @@
 // MCP server 和 PreToolUse hook 各自独立进程复用本文件,视觉逻辑只有一份。
 import { readFileSync, statSync } from 'node:fs';
 import { resolve, extname, isAbsolute } from 'node:path';
-import { debugLog as log } from './log.js';
+import { debugLog as log, appendLog, isSuccessLog } from './log.js';
 import { redactLocalPath } from './redact.js';
 
 // ---------------------------------------------------------------------------
@@ -16,8 +16,15 @@ import { redactLocalPath } from './redact.js';
 /** 把环境变量解析成最终配置(纯函数,便于测试)。 */
 export function buildConfig() {
   // 非数字配置回退默认值,避免 Number() 得到 NaN 导致请求"瞬间超时"/图片误判过大;
-  // 数值再钳制到合理区间,避免 VISION_TIMEOUT=0(立即超时)、VISION_MAX_IMAGE_MB=-5(全图拒收)这类坑
-  const toNum = (v, fallback) => { const n = Number(v); return Number.isFinite(n) ? n : fallback; };
+  // 数值再钳制到合理区间,避免 VISION_TIMEOUT=0(立即超时)、VISION_MAX_IMAGE_MB=-5(全图拒收)这类坑。
+  // 空/纯空白串同样回退默认值(与下方 maxTokens 的空串=未配置语义一致,避免 VISION_TIMEOUT='' 被
+  // Number('')===0 解析成 0 再钳成 1000ms"瞬间超时"这类意外)
+  const toNum = (v, fallback) => {
+    const s = String(v ?? '').trim();
+    if (s === '') return fallback;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : fallback;
+  };
   const rawTokens = (process.env.VISION_MAX_TOKENS ?? '').trim();
   const tokensNum = Number(rawTokens);
   return {
@@ -180,10 +187,20 @@ const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 // 重试退避等待,默认真实 setTimeout;测试可经 cfg.retrySleep 注入即时实现(与 cfg 注入同模式),避免用例真等几百 ms
 const realRetrySleep = ms => new Promise(r => setTimeout(r, ms));
 
-async function callVision(b64, mime, promptText, ocr, cfg) {
+// source 描述调用来源(如 "描述 C:\Users\...\images.jpg" / "OCR ..." / "截屏"),失败日志里精确定位
+// 是哪一次调用失败;sourceLabel 是成功日志用的纯来源标签("描述"/"OCR"/"截屏")——成功只需留痕、
+// 无需精确定位,也避免被看图路径累积进日志文件。调用方不传时按 ocr 标志兜底为"描述"/"OCR"。
+// 日志是本地私有文件(不入 git),失败行记录原始路径便于排查,与 screen_capture_degrade 记窗口标题一致。
+async function callVision(b64, mime, promptText, ocr, cfg, source, sourceLabel) {
   cfg = cfg || loadConfig();
+  const src = source || (ocr ? 'OCR' : '描述');
+  // ?? 而非 ||:显式传空字符串也保留(来源标签不会是空,防御未来调用方误传空串回退到含路径的 src)
+  const label = sourceLabel ?? src;
   if (!cfg.apiBase || !cfg.apiKey || !cfg.model) {
-    return { ok: false, text: '视觉引擎未配置。请设置环境变量 VISION_API_BASE / VISION_API_KEY / VISION_MODEL(或在接入工具的 MCP 配置里注入 env)。' };
+    const msg = '视觉引擎未配置。请设置环境变量 VISION_API_BASE / VISION_API_KEY / VISION_MODEL(或在接入工具的 MCP 配置里注入 env)。';
+    // 配置缺失是最常见的"日志里查不到报错"根因,失败必落盘
+    appendLog('vision_failed', `${src} ${msg} 模型=${cfg.model || '(空)'}`);
+    return { ok: false, text: msg };
   }
 
   const url = cfg.apiBase.includes('/chat/completions') ? cfg.apiBase : `${cfg.apiBase}/chat/completions`;
@@ -220,7 +237,16 @@ async function callVision(b64, mime, promptText, ocr, cfg) {
       await sleep(500 * (attempt + 1) + Math.floor(Math.random() * 250));
       continue;
     }
-    log(`${r.ok ? '成功' : '失败'} 耗时=${Date.now() - startedAt}ms${r.status ? ` HTTP=${r.status}` : ''}`);
+    const elapsed = Date.now() - startedAt;
+    const status = r.status ? ` HTTP=${r.status}` : '';
+    // 失败必落盘;成功默认落盘(VISION_LOG_SUCCESS=0 可关)。失败 detail 记 r.text(本身已脱敏凭据)。
+    // 成功行只拼来源标签(label),不拼 source 里的原始路径——成功无需精确定位,也不该让路径累积进日志
+    if (r.ok) {
+      if (isSuccessLog()) appendLog('vision_ok', `${label} 成功 耗时=${elapsed}ms${status} 模型=${cfg.model}`);
+    } else {
+      appendLog('vision_failed', `${src} ${r.text} 耗时=${elapsed}ms${status} 模型=${cfg.model}`);
+    }
+    log(`${r.ok ? '成功' : '失败'} 耗时=${elapsed}ms${status}`);
     return { ok: r.ok, text: r.text };
   }
   // 理论上不可达(最多 maxRetries 次后必 return),兜底
@@ -330,31 +356,45 @@ function overSizeError(sizeBytes, maxImageMB) {
  */
 async function readLocalImage(path, promptText, ocr, cfg) {
   const abs = isAbsolute(path) ? path : resolve(process.cwd(), path);
+  const label = ocr ? 'OCR' : '描述'; // 纯来源标签:成功日志只留这个,不拼路径
+  const src = `${label} ${abs}`;      // 失败日志用原始绝对路径,精确定位是哪张图
   if (!isImagePath(abs)) {
-    return { ok: false, text: `不支持的图片格式(支持 ${SUPPORTED_EXTS_TEXT}): ${path}` };
+    const msg = `不支持的图片格式(支持 ${SUPPORTED_EXTS_TEXT}): ${path}`;
+    appendLog('vision_failed', `${src} ${msg}`);
+    return { ok: false, text: msg };
   }
   cfg = cfg || loadConfig();
   try {
     // stat 预检:超限/空文件直接拒绝,避免把超大文件读进内存;stat 与 read 之间存在文件被替换的
     // 极小 TOCTOU 窗口,读后仍用 buf.length 复核一次(双保险:既省 IO 又消除中间态)。
     const preOver = overSizeError(statSync(abs).size, cfg.maxImageMB);
-    if (preOver) return preOver;
+    if (preOver) {
+      appendLog('vision_failed', `${src} ${preOver.text}`);
+      return preOver;
+    }
     const buf = readFileSync(abs);
     const over = overSizeError(buf.length, cfg.maxImageMB);
-    if (over) return over;
+    if (over) {
+      appendLog('vision_failed', `${src} ${over.text}`);
+      return over;
+    }
     // MIME 优先按文件头识别(防扩展名与实际内容不符),识别不了再回退扩展名;
     // isImagePath 已保证是支持的扩展名,mimeFromExt 必返回非 null
     const mime = sniffMime(buf) || mimeFromExt(abs);
     log(`读取图片 ${abs}(${(buf.length / 1024).toFixed(1)}KB, ${mime})`);
-    return await callVision(buf.toString('base64'), mime, promptText, ocr, cfg);
+    return await callVision(buf.toString('base64'), mime, promptText, ocr, cfg, src, label);
   } catch (err) {
     if (err.code === 'ENOENT') {
       // 回显用户传入的原始路径(redactLocalPath 只替换绝对路径,相对路径原样显示),便于核对拼写;
       // 绝对路径可能含用户名/启动目录结构,脱敏后再回传,与项目"错误消息不泄露本机路径"的惯例一致
-      return { ok: false, text: `找不到文件: ${redactLocalPath(path)}。若传的是相对路径,它相对 MCP server 的启动目录解析,建议改用绝对路径。` };
+      const msg = `找不到文件: ${redactLocalPath(path)}。若传的是相对路径,它相对 MCP server 的启动目录解析,建议改用绝对路径。`;
+      appendLog('vision_failed', `${src} ${msg}`);
+      return { ok: false, text: msg };
     }
     // 其它错误(权限/指向目录等)消息里也可能回显本机路径,同样脱敏
-    return { ok: false, text: `读取图片失败: ${redactLocalPath(redactUrlCreds(err.message))}` };
+    const msg = `读取图片失败: ${redactLocalPath(redactUrlCreds(err.message))}`;
+    appendLog('vision_failed', `${src} ${msg}`);
+    return { ok: false, text: msg };
   }
 }
 
@@ -363,21 +403,34 @@ export async function describeImage(path, focus) {
   return readLocalImage(path, buildUserPrompt(focus, false), false);
 }
 
-/** 描述一段已编码的 base64 图片(截屏等场景)。 */
-export async function describeImageFromBase64(b64, mime, focus, cfg) {
+/** 描述一段已编码的 base64 图片(截屏等场景)。参数顺序:(b64, mime, focus, cfg, source, sourceLabel)。
+ * cfg 缺省(传 undefined)时走 loadConfig() 读环境变量;source 用于失败日志定位(不传默认"截屏",
+ * 调用方可拼上原始路径如 "截屏 <filePath>");sourceLabel 是成功日志用的纯来源标签(不含路径),
+ * 与 readLocalImage 的 label 语义一致——失败行需精确定位(可带路径),成功行只需留痕、不该让路径累积进日志。
+ * 注意:cfg 在第 4 位、source 在第 5 位、sourceLabel 在第 6 位,调用方想只传 source/sourceLabel 时必须
+ * 显式 `undefined` 占住 cfg,否则字符串会被误当作 cfg,导致"视觉引擎未配置"。 */
+export async function describeImageFromBase64(b64, mime, focus, cfg, source, sourceLabel) {
   cfg = cfg || loadConfig();
+  const src = source || '截屏';
+  // ?? 而非 ||:显式传空字符串也保留(来源标签不会是空,防御未来调用方误传空串回退到含路径的 src)
+  const label = sourceLabel ?? src;
   // 合法 base64 可能折行,先去空白再校验;非法输入直接拒绝而非把垃圾发给视觉 API。
   // 合法 base64:整体为 4 的倍数长度,末尾可为 "xx==" 或 "xxx=" 补位。
   // 长度 mod 4 == 1(如 "abcde")虽能通过字符集校验,但解码是残缺字节,应一并拒绝。
   const clean = String(b64).replace(/\s+/g, '');
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(clean)) {
-    return { ok: false, text: 'base64 输入包含非法字符或长度不合法,请检查数据。' };
+    const msg = 'base64 输入包含非法字符或长度不合法,请检查数据。';
+    appendLog('vision_failed', `${src} ${msg}`);
+    return { ok: false, text: msg };
   }
   // base64 解码后的真实字节数就是原图大小,发请求前同样受 maxImageMB 约束
   const sizeBytes = Buffer.byteLength(clean, 'base64');
   const over = overSizeError(sizeBytes, cfg.maxImageMB);
-  if (over) return over;
-  return callVision(clean, mime || 'image/png', buildUserPrompt(focus, false), false, cfg);
+  if (over) {
+    appendLog('vision_failed', `${src} ${over.text}`);
+    return over;
+  }
+  return callVision(clean, mime || 'image/png', buildUserPrompt(focus, false), false, cfg, src, label);
 }
 
 /** 提取图片中的文字(OCR),保留排版顺序。 */

@@ -19,6 +19,13 @@ export function debugLog(...args) {
   if (isDebug()) console.error('[text-vision]', ...args);
 }
 
+/** 是否把"成功"的视觉调用写入日志文件(VISION_LOG_SUCCESS:默认开,0/false 关闭;失败日志不受此开关影响)。
+ * env 可注入(fake env),与 logFilePath/appendLog 保持一致,便于测试。 */
+export function isSuccessLog(env = process.env) {
+  const v = env.VISION_LOG_SUCCESS;
+  return v !== '0' && v !== 'false';
+}
+
 /**
  * 日志文件路径:VISION_LOG_FILE 配置则用它,否则默认 text-vision 仓库根下的 .text-vision/log.txt
  * (用模块路径定位仓库根,不随启动目录变;部署到哪、谁调用都落在各自仓库,方便查看)。
@@ -53,6 +60,9 @@ function rollbackLog(p, rotated) {
  * 追加一行日志:`ISO时间 [事件类型] 详情`。目录不存在自动创建;写失败静默(日志失败不能影响主流程)。
  * 文件超过 MAX_LOG_BYTES(1MB)时先轮转(旧日志改名 .1 保留,新日志重新写);轮转后若写入失败则回滚保留旧日志。
  * env 可注入(fake env),便于测试。调用方负责传入排查用的原始 detail(运行时路径无需脱敏)。
+ * 注意:MCP server 与 hook 是独立进程,可能并发写同一个日志文件。单行 appendFileSync 写入原子、不会交错;
+ * 但 1MB 轮转(stat+rename)跨进程存在极小竞态(两进程同时检测超限、rename 互相干扰),丢一行日志属可接受
+ * 的工程权衡,别当作 bug 排查——如需彻底串行,应改成单进程内持文件句柄的顺序写。
  */
 export function appendLog(event, detail, env = process.env) {
   const p = logFilePath(env);

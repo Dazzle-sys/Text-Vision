@@ -155,11 +155,24 @@ test('tools/call list_windows:窗口标题含本机路径 → 原样保留(运�
   assert.ok(!res.result.content[0].text.includes('[本地路径]'), '不应再替换为占位符');
 });
 
+test('tools/call list_windows:最小化窗口 → 标注 (已最小化),未最小化窗口不标注', async () => {
+  const c = await startServer({
+    listWindows: async () => [
+      { id: '1', process: 'chrome', title: 'Google Chrome', width: 800, height: 600 },
+      { id: '2', process: 'notepad', title: '未命名 - 记事本', width: 400, height: 300, minimized: true }
+    ]
+  });
+  const res = await c.request('tools/call', { name: 'list_windows', arguments: {} });
+  assert.equal(res.result.isError, false);
+  assert.ok(res.result.content[0].text.includes('未命名 - 记事本 (进程:notepad) (已最小化)'), '最小化窗口应标注 (已最小化)');
+  assert.ok(!res.result.content[0].text.includes('Google Chrome (进程:chrome) (已最小化)'), '未最小化窗口不应标注');
+});
+
 test('tools/call list_windows:空清单 → isError=true 且提示可能原因', async () => {
   const c = await startServer(); // listWindows mock 返回 []
   const res = await c.request('tools/call', { name: 'list_windows', arguments: {} });
   assert.equal(res.result.isError, true);
-  assert.match(res.result.content[0].text, /没有枚举到可见窗口/);
+  assert.match(res.result.content[0].text, /没有枚举到窗口/);
 });
 
 test('tools/call list_windows:枚举抛错 → isError=true 且透传错误', async () => {
@@ -198,6 +211,15 @@ test('tools/call 兜底:实现抛含本机路径的异常 → 统一错误形态
   assert.match(res.result.content[0].text, /描述图片失败/);
   assert.ok(!res.result.content[0].text.includes('C:\\Users\\someone'), '本机路径应被脱敏');
   assert.match(res.result.content[0].text, /\[本地路径\]/);
+});
+
+test('tools/call screen_capture:capture 返回 undefined → 明确错误而非 TypeError', async () => {
+  const c = await startServer({
+    capture: async () => undefined
+  });
+  const res = await c.request('tools/call', { name: 'screen_capture', arguments: {} });
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /未返回有效的图片数据/);
 });
 
 test('tools/call screen_capture:capture 抛含路径异常 → 兜底统一错误形态且路径脱敏', async () => {

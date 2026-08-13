@@ -7,6 +7,7 @@ import { writeFileSync, existsSync, mkdtempSync, rmSync, mkdirSync, readdirSync 
 import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { captureWindows, captureLinux, captureMac, captureScreen, cleanupScreenShot, defaultShotsDir, pruneShots } from '../src/capture-screen.js';
+import { resolvePsExe } from '../src/ps-exe.js';
 import { redactLocalPath } from '../src/redact.js';
 import { visionDir } from '../src/repo-root.js';
 
@@ -34,13 +35,34 @@ function withShots(fn) {
 }
 
 // ---------------------------------------------------------------------------
+// resolvePsExe:PowerShell 可执行文件探测
+// ---------------------------------------------------------------------------
+test('resolvePsExe:VISION_POWERSHELL 显式指定优先(去空白)', () => {
+  assert.equal(resolvePsExe({ VISION_POWERSHELL: 'C:/custom/pwsh.exe' }), 'C:/custom/pwsh.exe');
+  assert.equal(resolvePsExe({ VISION_POWERSHELL: '  C:/custom/pwsh.exe  ' }), 'C:/custom/pwsh.exe');
+});
+
+test('resolvePsExe:未指定时,Program Files 下探测到 pwsh 则用 pwsh', withShots(async (shotsRoot) => {
+  // 在临时目录模拟 pwsh 默认安装结构:ProgramFiles\PowerShell\7\pwsh.exe
+  const fakePf = join(shotsRoot, 'Program Files');
+  mkdirSync(join(fakePf, 'PowerShell', '7'), { recursive: true });
+  writeFileSync(join(fakePf, 'PowerShell', '7', 'pwsh.exe'), '');
+  assert.equal(resolvePsExe({ ProgramFiles: fakePf }), join(fakePf, 'PowerShell', '7', 'pwsh.exe'));
+}));
+
+test('resolvePsExe:pwsh 不存在 → 回退 powershell.exe', () => {
+  // ProgramFiles 指向不可能存在的目录 → statSync 抛 ENOENT → 回退
+  assert.equal(resolvePsExe({ ProgramFiles: 'C:/no-such-dir-xyz-123' }), 'powershell.exe');
+});
+
+// ---------------------------------------------------------------------------
 // captureWindows
 // ---------------------------------------------------------------------------
 test('captureWindows:成功 → 返回 { filePath },路径经环境变量注入子进程', withShots(async (shotsRoot) => {
   let spawnArgs;
   const child = fakeChild();
   const spawnFn = (cmd, args, opts) => { spawnArgs = { cmd, args, opts }; return child; };
-  const p = captureWindows({ shotsRoot, spawnFn, timeout: 30000, fallbackDelay: 1000 });
+  const p = captureWindows({ shotsRoot, spawnFn, psExe: 'powershell.exe', timeout: 30000, fallbackDelay: 1000 });
   child.emit('close', 0);
   const result = await p;
 
@@ -68,6 +90,27 @@ test('captureWindows:超时被 kill → 拒绝并带超时提示', withShots(asy
   await new Promise(r => setTimeout(r, 200));
   assert.equal(child.killed, true, '超时应 kill 子进程');
   child.emit('close', 0); // 被 kill 后仍收到 close,但 wasTimedOut 已标记
+  await assert.rejects(p, /超时/);
+}));
+
+test('captureWindows:带 windowId 且超时 → 额外跑兜底命令尝试还原最小化窗口', withShots(async (shotsRoot) => {
+  // 超时强杀时 PS 的 finally 不执行,窗口可能卡在屏幕外;应再 spawn 一条兜底命令(仅屏幕外窗口才最小化)
+  const spawned = [];
+  const spawnFn = (cmd, args, opts) => {
+    const c = fakeChild();
+    spawned.push({ cmd, args, opts, child: c });
+    return c;
+  };
+  const p = captureWindows({ shotsRoot, spawnFn, psExe: 'powershell.exe', timeout: 40, fallbackDelay: 1000, windowId: '456' });
+  await new Promise(r => setTimeout(r, 200)); // 等 killTimer 触发
+  assert.equal(spawned.length, 2, '主脚本 + 超时兜底各 spawn 一次');
+  const fb = spawned[1];
+  assert.equal(fb.cmd, 'powershell.exe', '兜底命令复用 PowerShell');
+  assert.ok(fb.args[3].includes('ShowWindow($h, 6)'), '兜底命令应最小化窗口');
+  assert.ok(fb.args[3].includes('-10000'), '仅当窗口位于屏幕外(SetWindowPos 哨兵坐标附近)才最小化');
+  assert.ok(fb.args[3].includes('IsIconic'), '已最小化/已关闭窗口不动,不引入副作用');
+  spawned[0].child.emit('close', 0); // 主脚本被 kill 后收到 close → 超时拒绝
+  fb.child.emit('close', 0);         // 清掉兜底命令的 5s timer,避免测试悬挂
   await assert.rejects(p, /超时/);
 }));
 
@@ -120,6 +163,34 @@ test('captureWindows:带 windowId 但退出码非 0 → 拒绝且 note 文件被
   child.emit('close', 1);
   await assert.rejects(p, /退出码 1/);
   assert.equal(existsSync(notePath), false, '失败时 note 文件应被清理');
+}));
+
+test('captureWindows:WIN_PS 含最小化恢复/遮挡守卫关键符号(回归守卫)', withShots(async (shotsRoot) => {
+  // 字符串包含断言即可,不解析 PowerShell:防止将来误删"最小化临时恢复 + 遮挡守卫"逻辑
+  let winPs;
+  const child = fakeChild();
+  const spawnFn = (cmd, args, opts) => { winPs = args[3]; return child; };
+  const p = captureWindows({ shotsRoot, spawnFn, timeout: 30000, fallbackDelay: 1000, windowId: '456' });
+  child.emit('close', 0);
+  await p;
+  assert.ok(winPs, '应捕获到 WIN_PS 脚本全文');
+  for (const symbol of [
+    'SetWindowPos',           // 移出虚拟屏
+    'ShowWindow($h, 4)',      // SW_SHOWNOACTIVATE:恢复最小化但不抢焦点
+    'ShowWindow($h, 6)',      // SW_MINIMIZE:截完还原最小化
+    'DwmFlush',               // 等 DWM 合成
+    'IsWindow',               // finally 还原失败守卫(防无效句柄误报)
+    'WindowFromPoint',        // 遮挡守卫:命中窗口自身判断
+    'IsSelfOrDescendant',     // 遮挡守卫:命中目标窗口自身
+    '$cxPts',                 // 遮挡守卫:多点网格采样(中心+四角),而非只查中心点
+    '$hitTarget',             // 遮挡守卫:任一采样点命中窗口即放行
+    '未能记录窗口原始位置',      // origRect 记录失败 → 提示还原后窗口可能需手动找回
+    '-32000',                 // 屏幕外坐标
+    '$origRect',              // 记录最小化窗口原始还原位置
+    'SetWindowPos($h, [IntPtr]::Zero, $origRect.Left' // 还原时先移回原位置再最小化
+  ]) {
+    assert.ok(winPs.includes(symbol), `WIN_PS 应包含 "${symbol}"`);
+  }
 }));
 
 // ---------------------------------------------------------------------------

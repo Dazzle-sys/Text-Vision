@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // text-vision:给无视觉文本模型(DeepSeek 等)提供视觉能力的 MCP server
 // 工具:describe_image / ocr_image / screen_capture / list_windows(全部返回纯文字)
 // Claude Code、OpenCode 及其他支持 MCP 的工具均可接入。
@@ -17,7 +18,7 @@ const SERVER_NAME = 'text-vision';
 const { version: SERVER_VERSION } = createRequire(import.meta.url)('../package.json');
 
 /**
- * 创建 MCP server 并注册三个视觉工具。connect 不在此函数内做,
+ * 创建 MCP server 并注册四个视觉工具。connect 不在此函数内做,
  * 便于自动化测试直接构造 server 验证工具注册、schema 与 handler 契约。
  * deps 可选,用于测试注入 mock 实现(不传则用真实实现)。
  */
@@ -88,11 +89,15 @@ export function createServer(deps = {}) {
       description: '截取屏幕(全屏或指定程序窗口)并用视觉模型描述画面,截屏内容会发送到第三方视觉 API 处理。适合查看当前应用界面、UI 状态。传 target(进程名或窗口标题,模糊匹配)可只截取该程序窗口,避免其他窗口遮挡影响识别质量;可用 list_windows 先查看当前有哪些窗口可选。',
       inputSchema: z.object({
         focus: z.string().optional().describe('关注的要点,如"当前界面布局""错误弹窗内容"'),
-        target: z.string().optional().describe('要截取的程序/窗口:进程名或窗口标题(如 chrome、未命名 - 记事本),模糊匹配。不传则截全部显示器全屏;找不到匹配窗口时自动回退全屏并提示')
+        target: z.string().optional().describe('要截取的程序/窗口:进程名或窗口标题(如 chrome、未命名 - 记事本),模糊匹配。被遮挡/最小化窗口也能截到本体内容。不传则截全部显示器全屏;找不到匹配窗口时自动回退全屏并提示')
       })
     },
     wrapTool('截屏', async ({ focus, target }) => {
       const shot = await capture({ target });
+      // 防御:注入的 capture 实现/未来回归返回空时,给明确错误文案,而非 TypeError(不向客户端抛内部异常)
+      if (!shot || typeof shot.b64 !== 'string') {
+        return textResult({ ok: false, text: '截屏失败:截屏实现未返回有效的图片数据。' });
+      }
       // 降级/未命中提示:截图成功、视觉请求前就写日志,保证即使后续描述失败,降级原因也已落盘 + stderr
       if (shot?.note) {
         // await 降级日志:未来 appendLog 若改异步实现,也保证降级原因先落盘再继续;失败仍静默,不拖垮主流程
@@ -111,19 +116,19 @@ export function createServer(deps = {}) {
   server.registerTool(
     'list_windows',
     {
-      description: '列出当前打开的可见窗口(标题 + 进程名),供选择 screen_capture 的 target。纯文本模型看不到屏幕,截指定窗口前先调用本工具拿到窗口清单,再填 screen_capture(target)。',
+      description: '列出当前打开的窗口(含最小化窗口,标注"已最小化";最小化窗口可用 screen_capture 截取,截取时会临时恢复)(标题 + 进程名),供选择 screen_capture 的 target。纯文本模型看不到屏幕,截指定窗口前先调用本工具拿到窗口清单,再填 screen_capture(target)。',
       inputSchema: z.object({})
     },
     wrapTool('枚举窗口', async () => {
       const windows = await listWindowsFn();
       if (!windows.length) {
-        return textResult({ ok: false, text: '没有枚举到可见窗口。可能原因:平台工具缺失(Windows 需已登录桌面会话 / macOS 未授权屏幕录制 / Linux 未装 wmctrl)或当前确实没有打开的窗口。' });
+        return textResult({ ok: false, text: '没有枚举到窗口。可能原因:平台工具缺失(Windows 需已登录桌面会话 / macOS 未授权屏幕录制 / Linux 未装 wmctrl)或当前确实没有打开的窗口。' });
       }
       const lines = windows.map(w => {
         const title = w.title; // 窗口标题原样展示(可能含本机文件路径,运行时输出,不入提交)
-        return `- ${title}${w.process ? ` (进程:${w.process})` : ''}`;
+        return `- ${title}${w.process ? ` (进程:${w.process})` : ''}${w.minimized ? ' (已最小化)' : ''}`;
       });
-      return textResult({ ok: true, text: `当前可见窗口(${windows.length}个):\n${lines.join('\n')}` });
+      return textResult({ ok: true, text: `当前打开的窗口(${windows.length}个):\n${lines.join('\n')}` });
     })
   );
 

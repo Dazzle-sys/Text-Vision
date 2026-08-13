@@ -3,6 +3,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { resolve, extname, isAbsolute } from 'node:path';
 import { debugLog as log } from './log.js';
+import { redactLocalPath } from './redact.js';
 
 // ---------------------------------------------------------------------------
 // 调试日志:DEBUG_VISION=1 时打印到 stderr(不影响 MCP stdout 协议),复用 log.js 的 debugLog
@@ -334,21 +335,26 @@ async function readLocalImage(path, promptText, ocr, cfg) {
   }
   cfg = cfg || loadConfig();
   try {
-    const size = statSync(abs).size;
-    const over = overSizeError(size, cfg.maxImageMB);
-    if (over) return over;
+    // stat 预检:超限/空文件直接拒绝,避免把超大文件读进内存;stat 与 read 之间存在文件被替换的
+    // 极小 TOCTOU 窗口,读后仍用 buf.length 复核一次(双保险:既省 IO 又消除中间态)。
+    const preOver = overSizeError(statSync(abs).size, cfg.maxImageMB);
+    if (preOver) return preOver;
     const buf = readFileSync(abs);
+    const over = overSizeError(buf.length, cfg.maxImageMB);
+    if (over) return over;
     // MIME 优先按文件头识别(防扩展名与实际内容不符),识别不了再回退扩展名;
     // isImagePath 已保证是支持的扩展名,mimeFromExt 必返回非 null
     const mime = sniffMime(buf) || mimeFromExt(abs);
-    log(`读取图片 ${abs}(${(size / 1024).toFixed(1)}KB, ${mime})`);
+    log(`读取图片 ${abs}(${(buf.length / 1024).toFixed(1)}KB, ${mime})`);
     return await callVision(buf.toString('base64'), mime, promptText, ocr, cfg);
   } catch (err) {
-    // ENOENT 通常来自相对路径被按 server 启动目录解析,给出可操作的提示
     if (err.code === 'ENOENT') {
-      return { ok: false, text: `找不到文件: ${abs}。若传的是相对路径,它相对 MCP server 的启动目录解析,建议改用绝对路径。` };
+      // 回显用户传入的原始路径(redactLocalPath 只替换绝对路径,相对路径原样显示),便于核对拼写;
+      // 绝对路径可能含用户名/启动目录结构,脱敏后再回传,与项目"错误消息不泄露本机路径"的惯例一致
+      return { ok: false, text: `找不到文件: ${redactLocalPath(path)}。若传的是相对路径,它相对 MCP server 的启动目录解析,建议改用绝对路径。` };
     }
-    return { ok: false, text: `读取图片失败: ${redactUrlCreds(err.message)}` };
+    // 其它错误(权限/指向目录等)消息里也可能回显本机路径,同样脱敏
+    return { ok: false, text: `读取图片失败: ${redactLocalPath(redactUrlCreds(err.message))}` };
   }
 }
 

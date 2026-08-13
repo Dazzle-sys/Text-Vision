@@ -294,10 +294,21 @@ test('不支持的扩展名 → 明确提示', async () => {
   assert.match(r.text, /不支持的图片格式/);
 });
 
-test('文件不存在(相对路径)→ 提示找不到文件并说明相对 cwd 解析', async () => {
+test('文件不存在(相对路径)→ 回显用户传入的相对路径(便于核对拼写),并说明相对 cwd 解析', async () => {
   const r = await readLocalImage('test/not-exists.png', 'prompt', false, CFG);
   assert.equal(r.ok, false);
   assert.match(r.text, /找不到文件/);
+  assert.ok(r.text.includes('test/not-exists.png'), '相对路径不含本机结构,应原样回显便于用户核对拼写');
+  assert.match(r.text, /相对路径/, '仍说明相对路径解析规则');
+});
+
+test('文件不存在(绝对路径)→ 绝对路径(可能含用户名)脱敏为占位符,不泄露本机结构', async () => {
+  const r = await readLocalImage('C:\\Users\\someone\\Desktop\\not-exists.png', 'prompt', false, CFG);
+  assert.equal(r.ok, false);
+  assert.match(r.text, /找不到文件/);
+  assert.match(r.text, /\[本地路径\]/, '绝对路径(可能含用户名/启动目录)应以占位符出现');
+  assert.ok(!r.text.includes('someone'), '不得泄露用户名');
+  assert.ok(!r.text.includes('not-exists.png'), '绝对路径的文件名也整体脱敏');
 });
 
 test('describeImage 读取真实 test/test.png 并成功描述(mock fetch)', async () => {

@@ -120,6 +120,13 @@ test('parseWin32:单元素数组(PowerShell 输出裸 JSON 字符串)→ 仍解�
   assert.equal(ws[0].title, 'Google Chrome');
 });
 
+test('parseWin32:第 6 段 minimized 标记解析(1→true, 0→false, 旧格式无第 6 段→false)', () => {
+  const rows = parseWin32('["1\\tchrome\\tA\\t800\\t600\\t1","2\\tnotepad\\tB\\t400\\t300\\t0","3\\tcalc\\tC\\t300\\t200"]');
+  assert.equal(rows[0].minimized, true);
+  assert.equal(rows[1].minimized, false);
+  assert.equal(rows[2].minimized, false, '旧格式无第 6 段应默认 false');
+});
+
 // ---------------------------------------------------------------------------
 // parseMac(swift tab 分隔行)
 // ---------------------------------------------------------------------------
@@ -163,6 +170,25 @@ test('parseLinux:空输出/无标题行 → 过滤', () => {
 test('listWindowsWin32:execFileFn 抛错 → 向上传播', async () => {
   const execFileFn = async () => { throw new Error('powershell 不可用'); };
   await assert.rejects(listWindowsWin32({ execFileFn }), /powershell 不可用/);
+});
+
+test('listWindowsWin32:psExe 可注入;默认走 resolvePsExe 解析(与截屏侧一致)', async () => {
+  let cmdUsed;
+  const execFileFn = async (cmd) => { cmdUsed = cmd; return { stdout: '[]' }; };
+  // 显式 psExe 透传
+  await listWindowsWin32({ execFileFn, psExe: 'C:/custom/pwsh.exe' });
+  assert.equal(cmdUsed, 'C:/custom/pwsh.exe', '显式 psExe 应透传到 execFileFn 的命令');
+  // 默认分支:不传 psExe → 经 resolvePsExe 解析(用 VISION_POWERSHELL 模拟"解析到非硬编码值"),
+  // 证明枚举不再写死 powershell.exe
+  const envSave = process.env.VISION_POWERSHELL;
+  process.env.VISION_POWERSHELL = 'C:/via-env/pwsh.exe';
+  try {
+    await listWindowsWin32({ execFileFn });
+    assert.equal(cmdUsed, 'C:/via-env/pwsh.exe', '默认应经 resolvePsExe 读取 VISION_POWERSHELL');
+  } finally {
+    if (envSave === undefined) delete process.env.VISION_POWERSHELL;
+    else process.env.VISION_POWERSHELL = envSave;
+  }
 });
 
 test('listWindowsLinux:wmctrl 未安装(ENOENT)→ 提示安装 wmctrl', async () => {

@@ -1,9 +1,11 @@
-// 三平台可见窗口枚举 + 模糊匹配。list_windows 工具与 screen_capture(target) 共用同一份实现:
-// 枚举出可见窗口清单,再由 matchWindow 纯函数按"进程名优先、标题其次"模糊匹配 target。
+// 三平台当前打开窗口枚举 + 模糊匹配。list_windows 工具与 screen_capture(target) 共用同一份实现:
+// 枚举出当前打开窗口清单(Windows 含最小化窗口,标注 minimized),再由 matchWindow 纯函数按
+// "进程名优先、标题其次"模糊匹配 target。
 // 平台只做"哑"枚举输出(win32=PowerShell、mac=swift、linux=wmctrl),匹配逻辑在 JS 端,可单测。
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFileSync } from 'node:fs';
+import { resolvePsExe } from './ps-exe.js';
 import { redactLocalPath } from './redact.js';
 
 const execFileP = promisify(execFile);
@@ -39,7 +41,7 @@ export function matchWindow(target, windows) {
   return best;
 }
 
-// --- Windows:PowerShell EnumWindows 枚举可见窗口,输出 JSON 数组 ---
+// --- Windows:PowerShell EnumWindows 枚举当前打开窗口(含最小化,输出 minimized 标记),输出 JSON 数组 ---
 // 标题用 SendMessageTimeout(WM_GETTEXT, SMTO_ABORTIFHUNG) 而非裸 GetWindowText:
 // 后者对无响应进程会同步卡死整个 PS 进程,SMTO_ABORTIFHUNG 让超时(2s)即返回,枚举永不挂起。
 const WIN_ENUM_PS = `
@@ -59,7 +61,6 @@ public class WinEnum {
     var items = new System.Collections.Generic.List<string>();
     EnumWindows((h, l) => {
       if (!IsWindowVisible(h)) return true;
-      if (IsIconic(h)) return true;
       IntPtr dummy;
       // WM_GETTEXTLENGTH 把文本长度放 lpdwResult(out 参数),SendMessageTimeout 返回值只表示"消息是否处理成功"
       IntPtr ok = SendMessageTimeout(h, 0x000E, IntPtr.Zero, IntPtr.Zero, 0x2, 2000, out dummy);
@@ -76,8 +77,10 @@ public class WinEnum {
       try { proc = Process.GetProcessById((int)pid).ProcessName; } catch { }
       RECT r; GetWindowRect(h, out r);
       int w = r.Right - r.Left, hh = r.Bottom - r.Top;
-      if (w <= 0 || hh <= 0) return true;
-      items.Add(h.ToInt64() + "\\t" + proc + "\\t" + title + "\\t" + w + "\\t" + hh);
+      // 最小化窗口的 GetWindowRect 可能返回任务栏按钮尺寸甚至 0×0:枚举不需要真实尺寸(输出不展示宽高,
+      // screen_capture 也只传 id,捕获端恢复后再取),故对最小化窗口放行,避免丢掉"最小化"这个 target 入口。
+      if (w <= 0 || hh <= 0) { if (!IsIconic(h)) return true; }
+      items.Add(h.ToInt64() + "\\t" + proc + "\\t" + title + "\\t" + w + "\\t" + hh + "\\t" + (IsIconic(h) ? "1" : "0"));
       return true;
     }, IntPtr.Zero);
     return items.ToArray();
@@ -87,8 +90,10 @@ $items = [WinEnum]::Enumerate();
 if ($items.Count -eq 0) { '[]' } else { $items | ConvertTo-Json -Compress }
 `;
 
-export async function listWindowsWin32({ execFileFn = execFileP, timeout = ENUM_TIMEOUT } = {}) {
-  const { stdout } = await execFileFn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', WIN_ENUM_PS], {
+export async function listWindowsWin32({ execFileFn = execFileP, timeout = ENUM_TIMEOUT, psExe } = {}) {
+  // 与截屏侧共用 resolvePsExe:显式注入优先,否则按 VISION_POWERSHELL → pwsh 探测 → powershell.exe 解析,
+  // 保证纯 pwsh(无 5.x)环境下列举与截屏行为一致,而不是两边各自硬编码 exe。
+  const { stdout } = await execFileFn(psExe ?? resolvePsExe(), ['-NoProfile', '-NonInteractive', '-Command', WIN_ENUM_PS], {
     timeout,
     windowsHide: true,
     maxBuffer: MAX_BUFFER
@@ -104,8 +109,9 @@ export function parseWin32(stdout) {
     // 统一归一成数组再逐行解析,否则单窗口时 list_windows 会误判为"没有可见窗口"
     const rows = Array.isArray(parsed) ? parsed : (typeof parsed === 'string' ? [parsed] : []);
     return rows.map(row => {
-      const [id, process = '', title = '', width = '0', height = '0'] = String(row).split('\t');
-      return { id, process, title, width: Number(width) || 0, height: Number(height) || 0 };
+      // 第 6 段是 minimized 标记("1"/"0");旧格式无该段 → 默认 false,向后兼容
+      const [id, process = '', title = '', width = '0', height = '0', minimized = '0'] = String(row).split('\t');
+      return { id, process, title, width: Number(width) || 0, height: Number(height) || 0, minimized: minimized === '1' };
     });
   } catch {
     return [];
@@ -185,7 +191,7 @@ export function parseLinux(stdout) {
     .filter(Boolean);
 }
 
-/** 按平台分派枚举当前可见窗口,deps 可注入 execFileFn(测试用)。平台不支持时抛错。 */
+/** 按平台分派枚举当前打开窗口,deps 可注入 execFileFn(测试用)。平台不支持时抛错。 */
 export async function listWindows(deps = {}) {
   const execFileFn = deps.execFileFn ?? execFileP;
   if (process.platform === 'win32') return listWindowsWin32({ execFileFn });

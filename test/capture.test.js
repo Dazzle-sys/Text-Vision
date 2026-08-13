@@ -119,6 +119,15 @@ test('captureWindows:spawn 同步抛错 → 拒绝', withShots(async (shotsRoot)
   await assert.rejects(captureWindows({ shotsRoot, spawnFn, timeout: 30000, fallbackDelay: 1000 }), /不存在/);
 }));
 
+test('captureWindows:非数字 windowId → 拒绝(与兜底命令校验一致)', withShots(async (shotsRoot) => {
+  // 回归:windowId 会拼进 PS 模板的 [IntPtr][long],非数字值应被拒绝而非注入脚本;
+  // 校验在生成输出路径之前,失败时不应残留任何临时文件
+  await assert.rejects(
+    captureWindows({ shotsRoot, spawnFn: () => fakeChild(), timeout: 30000, fallbackDelay: 1000, windowId: 'abc' }),
+    /无效的窗口句柄/
+  );
+}));
+
 // --- 指定窗口模式(windowId)---
 test('captureWindows:带 windowId → env 注入 HWND/NOTE,成功且无 note 文件时 note=undefined', withShots(async (shotsRoot) => {
   let spawnArgs;
@@ -497,6 +506,21 @@ test('redactLocalPath:URL 不被撕裂(含 :// 的 scheme 段不误当盘符路�
     '请求 https://dashscope.aliyuncs.com/v1/chat/completions 失败'
   );
   assert.equal(redactLocalPath('本地 http://127.0.0.1:11434/v1 也不受影响'), '本地 http://127.0.0.1:11434/v1 也不受影响');
+});
+
+test('redactLocalPath:URL 内路径段(/tmp /var/log /home 等词表命中)不被撕裂', () => {
+  // 回归:UNIX_PATH_RE 的 (?<!:) 只挡 scheme 后紧跟的 ://,挡不住主机名之后的路径段;
+  // 修复前 https://host/tmp/... 会被脱敏成 https://host[本地路径],URL 前置保护解决
+  assert.equal(redactLocalPath('https://example.com/tmp/error 出错了'), 'https://example.com/tmp/error 出错了');
+  assert.equal(redactLocalPath('详情见 https://example.com/var/log/msg'), '详情见 https://example.com/var/log/msg');
+  assert.equal(redactLocalPath('https://example.com/home/dir/a.png'), 'https://example.com/home/dir/a.png');
+});
+
+test('redactLocalPath:macOS /Users 与 /Library 绝对路径被脱敏(含用户名不泄漏)', () => {
+  // 回归:词表缺 Users(大小写敏感),修复前 mac 主目录路径原样返回,泄漏用户名
+  assert.equal(redactLocalPath('/Users/someone/Desktop/a.png'), '[本地路径]');
+  assert.equal(redactLocalPath('读取失败 /Users/someone/.ssh/config'), '读取失败 [本地路径]');
+  assert.equal(redactLocalPath('/Library/Logs/DiagnosticReports/foo'), '[本地路径]');
 });
 
 test('captureWindows:stderr 含本机绝对路径 → 错误消息被脱敏', withShots(async (shotsRoot) => {

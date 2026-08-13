@@ -284,6 +284,13 @@ if ([Wr]::IsWindow($h) -and -not [Wr]::IsIconic($h) -and [Wr]::GetWindowRect($h,
 
 export function captureWindows({ spawnFn = spawn, timeout = WIN_TIMEOUT, fallbackDelay = 5000, windowId = null, shotsRoot, psExe } = {}) {
   return new Promise((resolvePromise, reject) => {
+    // 防御:windowId 会拼进 PS 模板的 [IntPtr][long]$hwndRaw,注入前先校验纯数字,
+    // 与 restoreMinimizedFallback 的兜底校验(只接受纯数字)同一标准。当前唯一来源是
+    // win32 枚举的 h.ToInt64()(纯数字),校验防未来窗口来源变化把非数字值拼进 PS 脚本。
+    if (windowId != null && !/^\d+$/.test(String(windowId))) {
+      reject(new Error(`无效的窗口句柄:${windowId}`));
+      return;
+    }
     // 输出路径由 JS 端生成并经环境变量注入子进程,不再依赖 stdout 猜路径:
     // 若脚本在 Save 与 Write-Output 之间被超时 kill(或 Save 抛错),JS 仍知道目标路径,
     // 失败分支能按路径清理,不会在截图目录残留失败的截图文件。

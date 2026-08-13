@@ -379,6 +379,24 @@ test('captureScreen:不支持的平台 → 明确报错', withShots(async (shots
   await assert.rejects(captureScreen({ shotsRoot, platform: 'sunos', defaultTarget: '' }), /暂不支持在当前平台\(sunos\)截屏/);
 }));
 
+test('captureScreen:注入 platform 且不注入 listWindows → 窗口枚举透传同一平台(win32 走 PowerShell)', withShots(async (shotsRoot) => {
+  // 回归:注入 deps.platform 后截图分派走目标平台,窗口枚举也应透传同一平台,
+  // 否则枚举仍按真实 process.platform(CI 上可能走 Linux 枚举),跨平台分派测试不完整
+  const enumCalls = [];
+  const execFileFn = async (cmd, args) => { enumCalls.push(cmd); return { stdout: '[]' }; };
+  const child = fakeChild();
+  const spawnFn = (cmd, args, opts) => {
+    writeFileSync(opts.env.TEXT_VISION_SHOT, Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x00]));
+    setImmediate(() => child.emit('close', 0));
+    return child;
+  };
+  const shot = await captureScreen({ shotsRoot, platform: 'win32', target: '不存在的窗口xyz', execFileFn, spawnFn, timeout: 30000, fallbackDelay: 1000 });
+  assert.equal(shot.mime, 'image/jpeg');
+  assert.equal(enumCalls.length, 1, '应调用一次窗口枚举');
+  assert.equal(enumCalls[0], resolvePsExe(), 'win32 枚举应走与截图同一的 PowerShell 解析(resolvePsExe)');
+  assert.match(shot.note, /未找到/, '未命中应带 note 回退全屏');
+}));
+
 // --- captureScreen target 场景(注入 listWindows,win32 重点)---
 test('captureScreen:target 命中 → 走窗口截图,spawn env 含匹配窗口的 HWND', withShots(async (shotsRoot) => {
   let spawnArgs;

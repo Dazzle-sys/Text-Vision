@@ -37,7 +37,10 @@ export function defaultShotsDir(env = process.env) {
 
 /**
  * 默认截取窗口:VISION_DEFAULT_TARGET 配置则用它(与 target 同语义,进程名或窗口标题),否则 null(=全屏)。
- * 纯函数可单测,与 defaultShotsDir 同模式;captureScreen 里经 deps.defaultTarget 注入可绕开真实 env。
+ * 纯函数可单测,与 defaultShotsDir 同模式。
+ * captureScreen 的 deps.defaultTarget 注入的是本函数的返回值——一个字符串值(如测试传 '' 强制无默认),
+ * 不是注入本函数本身;captureScreen 里 `deps.target ?? deps.defaultTarget ?? defaultTarget()` 把
+ * deps.defaultTarget 当原始值用,从不调用它,若误注入函数会把函数源码当窗口名去匹配。
  */
 export function defaultTarget(env = process.env) {
   return (env.VISION_DEFAULT_TARGET || '').trim() || null;
@@ -353,7 +356,7 @@ export function captureWindows({ spawnFn = spawn, timeout = WIN_TIMEOUT, fallbac
       try { child.kill(); } catch { /* 忽略,不影响 settle */ }
       // 只打文件名,不暴露 tmpdir 绝对路径(含用户名),与本项目其他错误路径的隐私惯例一致
       console.error(`[text-vision] 截屏兜底超时已触发:临时文件可能未清理干净(${basename(outPath)}),若确认残留请手动删除。`);
-      settle(reject, new Error(`截屏超时(超过 ${timeout}ms 被中止)${err ? ': ' + redactLocalPath(err).trim().slice(0, 300) : ''}`));
+      settle(reject, new Error(`超时(超过 ${timeout}ms 被中止)${err ? ': ' + redactLocalPath(err).trim().slice(0, 300) : ''}`));
     }, timeout + fallbackDelay);
     child.stderr.on('data', d => { if (err.length < 4096) err += String(d).slice(0, 4096 - err.length); });
     child.on('error', e => {
@@ -365,7 +368,7 @@ export function captureWindows({ spawnFn = spawn, timeout = WIN_TIMEOUT, fallbac
       if (code !== 0 || wasTimedOut) {
         cleanupAll();
         // 用 wasTimedOut 标记而非 code==null 判断超时:部分 Windows 环境下 kill 后 code 可能非 null
-        const reason = wasTimedOut ? `截屏超时(超过 ${timeout}ms 被中止)` : `截屏失败(PowerShell 退出码 ${code})`;
+        const reason = wasTimedOut ? `超时(超过 ${timeout}ms 被中止)` : `PowerShell 退出码 ${code}`;
         settle(reject, new Error(`${reason}: ${redactLocalPath(err).trim().slice(0, 300)}`));
       } else {
         // 成功分支:读 note 文件(PS 降级时才有)→ 读后即删,返回 { filePath, note? }
@@ -406,7 +409,7 @@ async function captureLinuxFullScreen({ execFileFn = execFileP, timeout = TIMEOU
     cleanupScreenShot(path);
   }
   throw new Error(
-    `截屏失败:${errors.map(e => e.split(':')[0]).join('/')} 均不可用。` +
+    `${errors.map(e => e.split(':')[0]).join('/')} 均不可用。` +
     `请安装任一:gnome-screenshot、scrot、或 ImageMagick 的 import。` +
     `若已安装仍失败,可能是 Wayland/headless 环境,截图工具需要 X 或 portal 支持。`
   );
@@ -498,15 +501,19 @@ async function resolveTarget(target, listWindowsFn) {
  * targetLabel 记录实际命中的窗口(命中窗口的 title||process,全屏时 null),供上层提示"截的是哪个窗口"。
  * 截图保留在 shotsRoot(默认仓库根 .text-vision/screenshots),每次成功后 pruneShots 只留最近 MAX_SHOTS 张。
  * deps 可选,用于测试注入 mock 的 spawn/execFile/listWindows,以及 shotsRoot(测试用临时目录避免污染仓库)、
- * defaultTarget(注入默认窗口目标,绕开真实 env,如测试传 '' 强制无默认)。
- * platform 也可注入(默认 process.platform),让跨平台分派逻辑可在任意 CI 平台单测。
+ * defaultTarget(注入默认窗口目标字符串值,绕开真实 env,如测试传 '' 强制无默认;注意传 null 不会隔离环境——
+ * `deps.target ?? deps.defaultTarget ?? defaultTarget()` 会把 null 回退到 env,须传空串 '' 才强制无默认)。
+ * platform 也可注入(默认 process.platform),让跨平台分派逻辑可在任意 CI 平台单测;
+ * 注入 platform 时窗口枚举(listWindows)同样透传该平台,截图与枚举走同一分派,不会按真实平台枚举。
  */
 export async function captureScreen(deps = {}) {
   let filePath;
   try {
-    const listWindowsFn = deps.listWindows ?? listWindows;
     const shotsRoot = deps.shotsRoot ?? defaultShotsDir();
     const platform = deps.platform ?? process.platform;
+    // listWindowsFn:显式注入用注入的;否则包装真实 listWindows,把注入的 platform/execFileFn 透传,
+    // 让"注入 platform 测跨平台分派"时窗口枚举与截图走同一平台(否则枚举仍按真实 process.platform,分派测试不完整)
+    const listWindowsFn = deps.listWindows ?? (() => listWindows({ platform, execFileFn: deps.execFileFn }));
     // target 解析提前到入口:显式传 target 用之;未传(null/undefined)回退默认 target(VISION_DEFAULT_TARGET),
     // 仍无则全屏。命中传窗口 id,未命中/枚举失败带 note 走全屏(不抛错、不挂起)。
     // 注:注入 null 不会隔离环境(null ?? defaultTarget() 仍读 env),测试要强制"无默认"须注入空串 ''。
@@ -524,7 +531,7 @@ export async function captureScreen(deps = {}) {
     const buf = readFileSync(filePath);
     // 0 字节文件不该当作成功结果发给视觉 API(用真实字节数判断,与 Linux 的 statSync 校验一致)
     if (buf.length === 0) {
-      throw new Error('截屏失败:生成的文件为空(截图工具可能未正常工作)');
+      throw new Error('生成的文件为空(截图工具可能未正常工作)');
     }
     const b64 = buf.toString('base64');
     // mime 按实际输出格式推断:Windows/macOS 存 JPEG,Linux 存 PNG,供调用方正确声明 data URL

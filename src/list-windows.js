@@ -191,11 +191,16 @@ export function parseLinux(stdout) {
     .filter(Boolean);
 }
 
-/** 按平台分派枚举当前打开窗口,deps 可注入 execFileFn(测试用)。平台不支持时抛错。 */
+/**
+ * 按平台分派枚举当前打开窗口,deps 可注入 execFileFn / platform(测试用)。
+ * platform 注入供 captureScreen 透传注入的平台(截图与枚举走同一平台),默认 process.platform。
+ * 平台不支持时抛错。
+ */
 export async function listWindows(deps = {}) {
   const execFileFn = deps.execFileFn ?? execFileP;
-  if (process.platform === 'win32') return listWindowsWin32({ execFileFn });
-  if (process.platform === 'darwin') return listWindowsMac({ execFileFn });
-  if (process.platform === 'linux') return listWindowsLinux({ execFileFn });
-  throw new Error(`暂不支持在当前平台(${process.platform})枚举窗口`);
+  const platform = deps.platform ?? process.platform;
+  if (platform === 'win32') return listWindowsWin32({ execFileFn });
+  if (platform === 'darwin') return listWindowsMac({ execFileFn });
+  if (platform === 'linux') return listWindowsLinux({ execFileFn });
+  throw new Error(`暂不支持在当前平台(${platform})枚举窗口`);
 }

@@ -60,7 +60,7 @@ export function createServer(deps = {}) {
   server.registerTool(
     'describe_image',
     {
-      description: '用视觉模型描述一张本地图片(主体、颜色、布局、对象关系、图中文字等)。路径可为相对或绝对路径。用户粘贴/拖入的图片通常已被宿主工具保存为本地文件,消息里通常带路径或文件名线索:有路径直接传;只有文件名时,先搜索临时/项目目录里最近创建的图片来定位,不要向用户索要路径。图片内容会发送到第三方视觉 API 处理。',
+      description: '用视觉模型描述一张本地图片(主体、颜色、布局、对象关系、图中文字等)。路径可为相对或绝对路径。用户粘贴/拖入的图片通常已被宿主工具保存为本地文件,消息里通常带路径或文件名线索:有路径直接传;只有文件名时,本工具按路径直接读取本地文件、不做文件搜索,请先用宿主工具(文件搜索/临时目录)定位该文件后传完整路径,不要向用户索要路径。图片内容会发送到第三方视觉 API 处理。',
       inputSchema: z.object({
         path: z.string().describe(`本地图片路径(${SUPPORTED_EXTS_TEXT})`),
         focus: z.string().optional().describe('关注的要点,如"按钮的颜色""图表坐标轴含义""界面元素"')
@@ -75,7 +75,7 @@ export function createServer(deps = {}) {
   server.registerTool(
     'ocr_image',
     {
-      description: '提取图片中的文字(OCR),保留排版顺序。适合验证码、报错截图、文档截图。用户粘贴/拖入的截图通常已被宿主工具保存为本地文件:有路径直接传;只有文件名时,先搜索临时/项目目录里最近创建的图片来定位,不要向用户索要路径。图片内容会发送到第三方视觉 API 处理。',
+      description: '提取图片中的文字(OCR),保留排版顺序。适合验证码、报错截图、文档截图。用户粘贴/拖入的截图通常已被宿主工具保存为本地文件:有路径直接传;只有文件名时,本工具按路径直接读取本地文件、不做文件搜索,请先用宿主工具定位该文件后传完整路径。图片内容会发送到第三方视觉 API 处理。',
       inputSchema: z.object({
         path: z.string().describe(`本地图片路径(${SUPPORTED_EXTS_TEXT})`)
       })
@@ -93,7 +93,7 @@ export function createServer(deps = {}) {
       description: '截取屏幕(全屏或指定程序窗口)并用视觉模型描述画面,截屏内容会发送到第三方视觉 API 处理。适合查看当前应用界面、UI 状态。传 target(进程名或窗口标题,模糊匹配)可只截取该程序窗口,避免其他窗口遮挡影响识别质量;不传 target 时若配置了环境变量 VISION_DEFAULT_TARGET 则按它截取指定窗口,否则截全部显示器全屏;可用 list_windows 先查看当前有哪些窗口可选。',
       inputSchema: z.object({
         focus: z.string().optional().describe('关注的要点,如"当前界面布局""错误弹窗内容"'),
-        target: z.string().optional().describe('要截取的程序/窗口:进程名或窗口标题(如 chrome、未命名 - 记事本),模糊匹配。被遮挡/最小化窗口也能截到本体内容。不传 target 时:若配置了 VISION_DEFAULT_TARGET 则按它截取指定窗口,否则截全部显示器全屏;显式传空串或"全屏"/"fullscreen"(大小写不敏感)都截全屏。找不到匹配窗口时自动回退全屏并提示')
+        target: z.string().optional().describe('要截取的程序/窗口:进程名或窗口标题(如 chrome、未命名 - 记事本),模糊匹配。被遮挡/最小化窗口也能截到本体内容(该能力仅 Windows 生效;macOS 对被遮挡窗口可能截到遮挡层、最小化到 Dock 的窗口无法枚举)。不传 target 时:若配置了 VISION_DEFAULT_TARGET 则按它截取指定窗口,否则截全部显示器全屏;显式传空串或"全屏"/"fullscreen"(大小写不敏感)都截全屏。找不到匹配窗口时自动回退全屏并提示。注意:显式传了 target(含显式全屏标记)时,描述焦点提示用 target 原文,即使实际回退全屏也不变')
       })
     },
     wrapTool('截屏', async ({ focus, target }) => {
@@ -102,17 +102,21 @@ export function createServer(deps = {}) {
       if (!shot || typeof shot.b64 !== 'string') {
         return textResult({ ok: false, text: '截屏失败:截屏实现未返回有效的图片数据。' });
       }
-      // 降级/未命中提示:截图成功、视觉请求前就写日志,保证即使后续描述失败,降级原因也已落盘 + stderr
+      // 截屏 note(降级原因或成功截图的信息提示):截图成功、视觉请求前就写日志,保证即使后续描述失败,原因也已落盘 + stderr
+      // 注意:note 不全是"降级"——成功截到窗口时的信息提示(如"窗口原为最小化,已临时恢复")也走同一通道,
+      // 事件名固定为 screen_capture_degrade(测试固化),README 已说明该事件含降级原因与成功提示,不都意味着降级
       if (shot?.note) {
-        // await 降级日志:未来 appendLog 若改异步实现,也保证降级原因先落盘再继续;失败仍静默,不拖垮主流程
+        // await 日志:未来 appendLog 若改异步实现,也保证 note 先落盘再继续;失败仍静默,不拖垮主流程
         try { await appendLogFn('screen_capture_degrade', shot.note); } catch { /* 日志失败静默 */ }
-        debugLogFn('指定窗口截图降级:', shot.note);
+        debugLogFn('指定窗口截图 note:', shot.note);
       }
       // 第 4 参是 cfg(缺省走 loadConfig 读 env,这里显式 undefined 占位),第 5 参 source 用于失败日志定位
       // (拼上截图落盘路径,失败时可查是哪个截图文件)、第 6 参 sourceLabel 用于成功日志(纯标签'截屏',不含路径)。
       // 切勿把 source 直接放第 4 位——cfg 会被字符串污染,describeImageFromBase64 误判"视觉引擎未配置"。
       const src = shot?.filePath ? `截屏 ${shot.filePath}` : '截屏';
-      // focus 提示词:显式传 focus 用它;否则显式 target 用 target 原文(与旧行为逐字节一致),
+      // focus 提示词:显式传 focus 用它;否则显式 target 用 target 原文(历史契约,被测试固化)。
+      // 注意:显式 target 传了 '全屏'/'fullscreen' 标记、或未命中回退全屏时,提示仍是"指定的窗口:{target}"
+      // (target 原文),与实际截屏内容(全屏)不一致——这是保留的历史行为,不做修正;
       // 未传 target 但默认 target(VISION_DEFAULT_TARGET)命中时用真实窗口名,提升透明度;其余全屏用兜底文案。
       const focusText = focus || (target
         ? `指定的窗口:${target}`

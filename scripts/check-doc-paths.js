@@ -28,12 +28,19 @@ function isWhitelisted(line) {
 // 疑似绝对路径识别复用 src/redact.js 的同一组正则(WIN_PATH_RE / UNIX_PATH_RE),避免双源漂移:
 //  - Windows 盘符路径(C:\Users\xx 或 C:/Users/xx)
 //  - Unix 绝对路径,限定常见根目录词开头,避免把中文句子里用斜杠分隔的词误当路径
+let hitCount = 0;
 for (const file of targets) {
   const lines = readFileSync(join(root, file), 'utf8').split(/\r?\n/);
   lines.forEach((line, i) => {
     if (isWhitelisted(line)) return;
     if (WIN_PATH_RE.test(line) || UNIX_PATH_RE.test(line)) {
       console.log(`${file}:${i + 1}: ${line.trim()}`);
+      hitCount++;
     }
   });
+}
+// 命中即非零退出,让 npm run check:docs / CI 能真正失败,拦住硬编码路径提交(此前只打印不失败,检查形同虚设)
+if (hitCount > 0) {
+  console.error(`\ncheck:docs 发现 ${hitCount} 处疑似本机绝对路径,请替换为占位符(如 <你的实际路径>)后重新检查。`);
+  process.exit(1);
 }

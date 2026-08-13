@@ -23,7 +23,7 @@ MCP server 只解决"**能**看图"的问题。要解决"**主动**看图"——
 { "tool_name": "Read", "tool_input": { "file_path": "..." }, "cwd": "..." }
 
 // stdout 输出(exit 0,只输出一个 JSON)
-{ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "图片已转为文字描述,请直接基于注入内容继续分析,不要读取图片二进制。", "additionalContext": "【图片视觉描述】..." } }
+{ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "该文件是图片,已通过视觉引擎转为文字描述,请直接基于注入的描述内容继续分析,不要读取图片二进制。", "additionalContext": "【图片视觉描述】..." } }
 ```
 
 ### 1.1 注册到 Claude Code(必做,否则 hook 不生效)

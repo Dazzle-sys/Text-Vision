@@ -25,7 +25,7 @@ The MCP server solves the "**can** read images" problem. Enabling the model to "
 { "tool_name": "Read", "tool_input": { "file_path": "..." }, "cwd": "..." }
 
 // stdout output (exit 0, exactly one JSON object)
-{ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "图片已转为文字描述,请直接基于注入内容继续分析,不要读取图片二进制。", "additionalContext": "【图片视觉描述】..." } }
+{ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "该文件是图片,已通过视觉引擎转为文字描述,请直接基于注入的描述内容继续分析,不要读取图片二进制。", "additionalContext": "【图片视觉描述】..." } }
 ```
 
 ### 1.1 Register with Claude Code (required — the hook is inactive until registered)

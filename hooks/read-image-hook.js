@@ -18,8 +18,9 @@ import { isDirectRun } from '../src/is-direct-run.js';
 // 抽成纯函数便于测试:AGENTS.md 约定"未显式配置时默认 30000",此逻辑是产品行为,别改
 export function applyHookDefaults(env = process.env) {
   // 只用 undefined 判断"未配置",不能用 !env.VISION_TIMEOUT:后者会把显式 VISION_TIMEOUT=0 也覆盖成
-  // 默认值,与 MCP server 侧 buildConfig 的钳制语义(0 → 下限 1000ms)不一致
-  if (env.VISION_TIMEOUT === undefined) env.VISION_TIMEOUT = '30000';
+  // 默认值,与 MCP server 侧 buildConfig 的钳制语义(0 → 下限 1000ms)不一致。
+  // 返回新对象、不修改入参(纯函数);main 里显式 Object.assign 进 process.env。
+  if (env.VISION_TIMEOUT === undefined) return { ...env, VISION_TIMEOUT: '30000' };
   return env;
 }
 
@@ -137,7 +138,8 @@ async function main() {
 
 // 仅直接运行(node hooks/read-image-hook.js)时读 stdin 执行;被 import 时不执行,便于测试
 if (isDirectRun(import.meta.url)) {
-  applyHookDefaults();
+  // 把 hook 场景默认超时合并进本进程 env(独立进程,副作用仅限自身),让后续 loadConfig 读到
+  Object.assign(process.env, applyHookDefaults());
   // main 内部已收口异常,这里兜底 stdin 流本身出错等未来回归:任何异常都以 allow 放行,
   // 保证宿主永远能收到单个 JSON(否则会因无 stdout 输出而挂起)
   main().catch(() => console.log(JSON.stringify(allowOutput())));

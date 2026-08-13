@@ -10,6 +10,7 @@ import { captureScreen } from './capture-screen.js';
 import { listWindows } from './list-windows.js';
 import { appendLog, debugLog } from './log.js';
 import { isDirectRun } from './is-direct-run.js';
+import { redactLocalPath } from './redact.js';
 
 const SERVER_NAME = 'text-vision';
 // 版本号单一来源:从 package.json 读取,避免升版本时只改了一处导致 tools/list 版本与包不一致
@@ -36,6 +37,21 @@ export function createServer(deps = {}) {
     return { content: [{ type: 'text', text: r.text }], isError: !r.ok };
   }
 
+  /**
+   * 统一工具 handler 兜底:实现层正常收口为 { ok, text },这里兜底未来回归——任何异常都以
+   * 脱敏后的统一错误形态返回,保证 MCP 响应永远是 { content, isError } 形状,且不向客户端
+   * 泄露本机路径(redactLocalPath,与 capture-screen 等模块的隐私惯例一致)。
+   */
+  function wrapTool(prefix, fn) {
+    return async (args) => {
+      try {
+        return await fn(args);
+      } catch (err) {
+        return textResult({ ok: false, text: `${prefix}失败: ${redactLocalPath(err?.message ?? String(err))}` });
+      }
+    };
+  }
+
   server.registerTool(
     'describe_image',
     {
@@ -45,15 +61,10 @@ export function createServer(deps = {}) {
         focus: z.string().optional().describe('关注的要点,如"按钮的颜色""图表坐标轴含义""界面元素"')
       })
     },
-    async ({ path, focus }) => {
-      try {
-        const r = await describe(path, focus);
-        return textResult(r);
-      } catch (err) {
-        // 实现层(readLocalImage)已收口为返回值,这里兜底未来回归:任何异常都以统一错误形态返回
-        return textResult({ ok: false, text: `描述图片失败: ${err?.message ?? err}` });
-      }
-    }
+    wrapTool('描述图片', async ({ path, focus }) => {
+      const r = await describe(path, focus);
+      return textResult(r);
+    })
   );
 
   server.registerTool(
@@ -64,15 +75,11 @@ export function createServer(deps = {}) {
         path: z.string().describe(`本地图片路径(${SUPPORTED_EXTS_TEXT})`)
       })
     },
-    async ({ path }) => {
-      try {
-        const r = await ocr(path);
-        return textResult(r);
-      } catch (err) {
-        // 同 describe_image:兜底未来回归,保证统一 { content, isError } 形状
-        return textResult({ ok: false, text: `OCR 失败: ${err?.message ?? err}` });
-      }
-    }
+    // 'OCR ' 尾随空格:英文缩写与中文"失败"之间保留空格(原手写文案如此)
+    wrapTool('OCR ', async ({ path }) => {
+      const r = await ocr(path);
+      return textResult(r);
+    })
   );
 
   server.registerTool(
@@ -84,26 +91,21 @@ export function createServer(deps = {}) {
         target: z.string().optional().describe('要截取的程序/窗口:进程名或窗口标题(如 chrome、未命名 - 记事本),模糊匹配。不传则截全部显示器全屏;找不到匹配窗口时自动回退全屏并提示')
       })
     },
-    async ({ focus, target }) => {
-      let shot;
-      try {
-        shot = await capture({ target });
-        // 降级/未命中提示:截图成功、视觉请求前就写日志,保证即使后续描述失败,降级原因也已落盘 + stderr
-        if (shot?.note) {
-          // await 降级日志:未来 appendLog 若改异步实现,也保证降级原因先落盘再继续;失败仍静默,不拖垮主流程
-          try { await appendLogFn('screen_capture_degrade', shot.note); } catch { /* 日志失败静默 */ }
-          debugLogFn('指定窗口截图降级:', shot.note);
-        }
-        const r = await describeBase64(shot.b64, shot.mime, focus || (target ? `指定的窗口:${target}` : '当前屏幕/UI 界面'));
-        // 描述成功才把降级提示拼进返回文本;描述失败时文本是错误文案,note 已通过日志(文件+stderr)传达
-        const hint = r.ok && shot?.note ? `\n\n[提示] ${shot.note}` : '';
-        // 截图保留在仓库 .text-vision/screenshots(最近 20 张),直接给完整路径方便打开(运行时输出,不入提交)
-        const saveHint = r.ok && shot?.filePath ? `\n\n[截图已保存到 ${shot.filePath},可打开查看;仅保留最近 20 张,超出自动清理]` : '';
-        return textResult({ ok: r.ok, text: r.text + hint + saveHint });
-      } catch (err) {
-        return textResult({ ok: false, text: `截屏失败: ${err?.message ?? err}` });
+    wrapTool('截屏', async ({ focus, target }) => {
+      const shot = await capture({ target });
+      // 降级/未命中提示:截图成功、视觉请求前就写日志,保证即使后续描述失败,降级原因也已落盘 + stderr
+      if (shot?.note) {
+        // await 降级日志:未来 appendLog 若改异步实现,也保证降级原因先落盘再继续;失败仍静默,不拖垮主流程
+        try { await appendLogFn('screen_capture_degrade', shot.note); } catch { /* 日志失败静默 */ }
+        debugLogFn('指定窗口截图降级:', shot.note);
       }
-    }
+      const r = await describeBase64(shot.b64, shot.mime, focus || (target ? `指定的窗口:${target}` : '当前屏幕/UI 界面'));
+      // 描述成功才把降级提示拼进返回文本;描述失败时文本是错误文案,note 已通过日志(文件+stderr)传达
+      const hint = r.ok && shot?.note ? `\n\n[提示] ${shot.note}` : '';
+      // 截图保留在仓库 .text-vision/screenshots(最近 20 张),直接给完整路径方便打开(运行时输出,不入提交)
+      const saveHint = r.ok && shot?.filePath ? `\n\n[截图已保存到 ${shot.filePath},可打开查看;仅保留最近 20 张,超出自动清理]` : '';
+      return textResult({ ok: r.ok, text: r.text + hint + saveHint });
+    })
   );
 
   server.registerTool(
@@ -112,21 +114,17 @@ export function createServer(deps = {}) {
       description: '列出当前打开的可见窗口(标题 + 进程名),供选择 screen_capture 的 target。纯文本模型看不到屏幕,截指定窗口前先调用本工具拿到窗口清单,再填 screen_capture(target)。',
       inputSchema: z.object({})
     },
-    async () => {
-      try {
-        const windows = await listWindowsFn();
-        if (!windows.length) {
-          return textResult({ ok: false, text: '没有枚举到可见窗口。可能原因:平台工具缺失(Windows 需已登录桌面会话 / macOS 未授权屏幕录制 / Linux 未装 wmctrl)或当前确实没有打开的窗口。' });
-        }
-        const lines = windows.map(w => {
-          const title = w.title; // 窗口标题原样展示(可能含本机文件路径,运行时输出,不入提交)
-          return `- ${title}${w.process ? ` (进程:${w.process})` : ''}`;
-        });
-        return textResult({ ok: true, text: `当前可见窗口(${windows.length}个):\n${lines.join('\n')}` });
-      } catch (err) {
-        return textResult({ ok: false, text: `枚举窗口失败: ${err?.message ?? err}` });
+    wrapTool('枚举窗口', async () => {
+      const windows = await listWindowsFn();
+      if (!windows.length) {
+        return textResult({ ok: false, text: '没有枚举到可见窗口。可能原因:平台工具缺失(Windows 需已登录桌面会话 / macOS 未授权屏幕录制 / Linux 未装 wmctrl)或当前确实没有打开的窗口。' });
       }
-    }
+      const lines = windows.map(w => {
+        const title = w.title; // 窗口标题原样展示(可能含本机文件路径,运行时输出,不入提交)
+        return `- ${title}${w.process ? ` (进程:${w.process})` : ''}`;
+      });
+      return textResult({ ok: true, text: `当前可见窗口(${windows.length}个):\n${lines.join('\n')}` });
+    })
   );
 
   return server;

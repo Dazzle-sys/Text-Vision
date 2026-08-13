@@ -41,22 +41,21 @@ const IMG = join(CWD, 'test', 'test.png');
 // ---------------------------------------------------------------------------
 // applyHookDefaults:hook 场景默认 30s 超时
 // ---------------------------------------------------------------------------
-test('applyHookDefaults:未设 VISION_TIMEOUT 时默认 30000', () => {
+test('applyHookDefaults:未设 VISION_TIMEOUT 时默认 30000(不修改入参)', () => {
   const env = {};
-  applyHookDefaults(env);
-  assert.equal(env.VISION_TIMEOUT, '30000');
+  const out = applyHookDefaults(env);
+  assert.equal(out.VISION_TIMEOUT, '30000');
+  assert.ok(!('VISION_TIMEOUT' in env), '纯函数不应修改入参');
 });
 
 test('applyHookDefaults:已显式设置则不覆盖', () => {
-  const env = { VISION_TIMEOUT: '10000' };
-  applyHookDefaults(env);
-  assert.equal(env.VISION_TIMEOUT, '10000');
+  const out = applyHookDefaults({ VISION_TIMEOUT: '10000' });
+  assert.equal(out.VISION_TIMEOUT, '10000');
 });
 
 test('applyHookDefaults:显式 VISION_TIMEOUT=0 不被覆盖(钳制交给 buildConfig)', () => {
-  const env = { VISION_TIMEOUT: '0' };
-  applyHookDefaults(env);
-  assert.equal(env.VISION_TIMEOUT, '0');
+  const out = applyHookDefaults({ VISION_TIMEOUT: '0' });
+  assert.equal(out.VISION_TIMEOUT, '0');
 });
 
 // ---------------------------------------------------------------------------

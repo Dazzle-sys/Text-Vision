@@ -188,3 +188,25 @@ test('tools/call 失败:实现返回 ok:false → isError=true 且内容透传',
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /视觉引擎未配置/);
 });
+
+test('tools/call 兜底:实现抛含本机路径的异常 → 统一错误形态且路径脱敏', async () => {
+  const c = await startServer({
+    describe: async () => { throw new Error('读取失败: C:\\Users\\someone\\Desktop\\a.png'); }
+  });
+  const res = await c.request('tools/call', { name: 'describe_image', arguments: { path: 'a.png' } });
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /描述图片失败/);
+  assert.ok(!res.result.content[0].text.includes('C:\\Users\\someone'), '本机路径应被脱敏');
+  assert.match(res.result.content[0].text, /\[本地路径\]/);
+});
+
+test('tools/call screen_capture:capture 抛含路径异常 → 兜底统一错误形态且路径脱敏', async () => {
+  const c = await startServer({
+    capture: async () => { throw new Error('截屏失败: C:\\Users\\someone\\Desktop\\a.png'); }
+  });
+  const res = await c.request('tools/call', { name: 'screen_capture', arguments: {} });
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /截屏失败/);
+  assert.ok(!res.result.content[0].text.includes('C:\\Users\\someone'), '本机路径应被脱敏');
+  assert.match(res.result.content[0].text, /\[本地路径\]/);
+});

@@ -29,6 +29,8 @@ export function matchWindow(target, windows) {
     if (r > bestRank) { bestRank = r; best = w; }
     if (r === 3) break;
   }
+  // 进程名已精确命中(rank 最高为 3),标题不可能覆盖,跳过第二遍枚举
+  if (bestRank === 3) return best;
   for (const w of windows) { // 第二遍:窗口标题
     const r = rank((w.title || '').toLowerCase());
     if (r > bestRank) { bestRank = r; best = w; }

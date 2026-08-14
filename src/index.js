@@ -7,7 +7,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import * as z from 'zod/v4';
 import { describeImage, describeImageFromBase64, ocrImage, SUPPORTED_EXTS_TEXT } from './text-vision-client.js';
-import { captureScreen } from './capture-screen.js';
+import { captureScreen, NO_TARGET_MSG } from './capture-screen.js';
 import { listWindows } from './list-windows.js';
 import { appendLog, debugLog } from './log.js';
 import { isDirectRun } from './is-direct-run.js';
@@ -90,14 +90,19 @@ export function createServer(deps = {}) {
   server.registerTool(
     'screen_capture',
     {
-      description: '截取屏幕(全屏或指定程序窗口)并用视觉模型描述画面,截屏内容会发送到第三方视觉 API 处理。适合查看当前应用界面、UI 状态。传 target(进程名或窗口标题,模糊匹配)可只截取该程序窗口,避免其他窗口遮挡影响识别质量;不传 target 时若配置了环境变量 VISION_DEFAULT_TARGET 则按它截取指定窗口,否则截全部显示器全屏;可用 list_windows 先查看当前有哪些窗口可选。',
+      description: '截取指定程序窗口并用视觉模型描述画面,截屏内容会发送到第三方视觉 API 处理。适合查看某个应用的界面、UI 状态。必须传 target(窗口 ID、进程名或窗口标题,模糊匹配)指定要截的窗口;可先用 list_windows 查看当前有哪些窗口可选。找不到匹配窗口/窗口截图失败会明确报错,不会回退全屏。',
       inputSchema: z.object({
         focus: z.string().optional().describe('关注的要点,如"当前界面布局""错误弹窗内容"'),
-        target: z.string().optional().describe('要截取的程序/窗口:进程名或窗口标题(如 chrome、未命名 - 记事本),模糊匹配。被遮挡/最小化窗口也能截到本体内容(该能力仅 Windows 生效;macOS 对被遮挡窗口可能截到遮挡层、最小化到 Dock 的窗口无法枚举)。不传 target 时:若配置了 VISION_DEFAULT_TARGET 则按它截取指定窗口,否则截全部显示器全屏;显式传空串或"全屏"/"fullscreen"(大小写不敏感)都截全屏。找不到匹配窗口时自动回退全屏并提示。注意:显式传了 target(含显式全屏标记)时,描述焦点提示用 target 原文,即使实际回退全屏也不变')
+        target: z.string().optional().describe('必填:要截取的程序/窗口——窗口 ID、进程名或窗口标题(如 456、chrome、未命名 - 记事本),模糊匹配。被遮挡/最小化窗口也能截到本体内容(该能力仅 Windows 生效;macOS 对被遮挡窗口可能截到遮挡层、最小化到 Dock 的窗口无法枚举)。找不到匹配窗口时明确报错。'),
+        clientArea: z.boolean().optional().describe('(仅 Windows 生效)为 true 时截窗口客户区(去边框和标题栏),视觉描述聚焦窗口内容;macOS/Linux 忽略此参数')
       })
     },
-    wrapTool('截屏', async ({ focus, target }) => {
-      const shot = await capture({ target });
+    wrapTool('截屏', async ({ focus, target, clientArea }) => {
+      // target 必填:本工具只截指定窗口,不再支持全屏/默认窗口。空白 target 也给友好错误,而非走到枚举
+      if (!target || !String(target).trim()) {
+        return textResult({ ok: false, text: NO_TARGET_MSG });
+      }
+      const shot = await capture({ target, clientArea });
       // 防御:注入的 capture 实现/未来回归返回空时,给明确错误文案,而非 TypeError(不向客户端抛内部异常)
       if (!shot || typeof shot.b64 !== 'string') {
         return textResult({ ok: false, text: '截屏失败:截屏实现未返回有效的图片数据。' });
@@ -114,15 +119,9 @@ export function createServer(deps = {}) {
       // (拼上截图落盘路径,失败时可查是哪个截图文件)、第 6 参 sourceLabel 用于成功日志(纯标签'截屏',不含路径)。
       // 切勿把 source 直接放第 4 位——cfg 会被字符串污染,describeImageFromBase64 误判"视觉引擎未配置"。
       const src = shot?.filePath ? `截屏 ${shot.filePath}` : '截屏';
-      // focus 提示词:显式传 focus 用它;否则显式 target 用 target 原文(历史契约,被测试固化)。
-      // 注意:显式 target 传了 '全屏'/'fullscreen' 标记、或未命中回退全屏时,提示仍是"指定的窗口:{target}"
-      // (target 原文),与实际截屏内容(全屏)不一致——这是保留的历史行为,不做修正;
-      // 未传 target 但默认 target(VISION_DEFAULT_TARGET)命中时用真实窗口名,提升透明度;其余全屏用兜底文案。
-      const focusText = focus || (target
-        ? `指定的窗口:${target}`
-        : shot?.targetLabel
-          ? `指定的窗口:${shot.targetLabel}`
-          : '当前屏幕/UI 界面');
+      // focus 提示词:显式传 focus 用它;否则用 target 原文(窗口 ID/进程名/标题)。target 必填(handler 已校验),
+      // 历史契约:显式 target 用原文而非命中的真实窗口名(targetLabel),不额外枚举/不改变提示来源。
+      const focusText = focus || `指定的窗口:${target}`;
       const r = await describeBase64(shot.b64, shot.mime, focusText, undefined, src, '截屏');
       // 描述成功才把降级提示拼进返回文本;描述失败时文本是错误文案,note 已通过日志(文件+stderr)传达
       const hint = r.ok && shot?.note ? `\n\n[提示] ${shot.note}` : '';
@@ -135,7 +134,7 @@ export function createServer(deps = {}) {
   server.registerTool(
     'list_windows',
     {
-      description: '列出当前打开的窗口(含最小化窗口,标注"已最小化";最小化窗口可用 screen_capture 截取,截取时会临时恢复)(标题 + 进程名),供选择 screen_capture 的 target。纯文本模型看不到屏幕,截指定窗口前先调用本工具拿到窗口清单,再填 screen_capture(target)。',
+      description: '列出当前打开的窗口(含最小化窗口,标注"已最小化";最小化窗口可用 screen_capture 截取,截取时会临时恢复)(窗口 ID + 标题 + 进程名 + PID),供选择 screen_capture 的 target(可传窗口 ID 精确锁定)。纯文本模型看不到屏幕,截指定窗口前先调用本工具拿到窗口清单,再填 screen_capture(target)。',
       inputSchema: z.object({})
     },
     wrapTool('枚举窗口', async () => {
@@ -145,7 +144,15 @@ export function createServer(deps = {}) {
       }
       const lines = windows.map(w => {
         const title = w.title; // 窗口标题原样展示(可能含本机文件路径,运行时输出,不入提交)
-        return `- ${title}${w.process ? ` (进程:${w.process})` : ''}${w.minimized ? ' (已最小化)' : ''}`;
+        // 元信息:进程名 / PID / 最小化标记
+        const meta = [];
+        if (w.process) meta.push(`进程:${w.process}`);
+        if (w.pid) meta.push(`PID:${w.pid}`);
+        if (w.minimized) meta.push('已最小化');
+        const metaText = meta.length ? ` (${meta.join(' ')})` : '';
+        // 窗口 ID 供 target 直接传(Windows 十进制 HWND / Linux 0x 十六进制 X11 id)
+        const idText = w.id ? ` ID:${w.id}` : '';
+        return `- ${title}${metaText}${idText}`;
       });
       return textResult({ ok: true, text: `当前打开的窗口(${windows.length}个):\n${lines.join('\n')}` });
     })

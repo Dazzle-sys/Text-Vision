@@ -4,6 +4,8 @@ English | [简体中文](auto-invoke.md)
 
 The MCP server solves the "**can** read images" problem; the three layers below solve "**actively** read" — the model calling a vision tool on its own during a task rather than waiting for a manually supplied description. Enable them as needed; each builds on the previous one.
 
+> **Division of labor**: the read tools (`describe_image` / `ocr_image`) serve user-pasted and local images; the capture tools (`screen_capture` / `list_windows`) exist for an **executing AI to call on its own for vision** — the model captures when it needs to see a running program's UI/state, without waiting for a manual screenshot. This "proactively capture" guidance is built into the rule templates (see [templates/](../templates/)' "Proactively capture screens" section).
+
 | Layer | Carrier | Tools | Trigger | Reliability |
 |---|---|---|---|---|
 | Rule layer | `CLAUDE.md` / `AGENTS.md` | Claude Code + general (OpenCode, Cursor, Codex…) | model compliance | medium (depends on the model) |
@@ -77,7 +79,7 @@ echo '{"tool_name":"Read","cwd":"<absolute repo path>","tool_input":{"file_path"
 
 ### 2.1 `CLAUDE.md` (Claude Code-specific; place in the project root)
 
-Ready-made template: [`templates/CLAUDE.md`](../templates/CLAUDE.md) — copy it into the project root. Core requirements: call a `text-vision` tool on any image; for a pasted image, locate the file and call `describe_image(path)` without asking for the path; prefer `ocr_image(path)` for captchas / error / document screenshots; use `list_windows()` + `screen_capture(target=…)` for a specific program window.
+Ready-made template: [`templates/CLAUDE.md`](../templates/CLAUDE.md) — copy it into the project root. Core requirements: call a `text-vision` tool on any image; for a pasted image, locate the file and call `describe_image(path)` without asking for the path; prefer `ocr_image(path)` for captchas / error / document screenshots; **proactively use `list_windows()` + `screen_capture(target=…)` when the task involves a running program's UI/state (confirm with the user first if the window may show sensitive content)**.
 
 ### 2.2 `AGENTS.md` (general — OpenCode / Cursor / Gemini CLI / Codex; place in the project root)
 

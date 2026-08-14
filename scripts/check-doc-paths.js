@@ -39,7 +39,7 @@ for (const file of targets) {
     }
   });
 }
-// 命中即非零退出,让 npm run check:docs / CI 能真正失败,拦住硬编码路径提交(此前只打印不失败,检查形同虚设)
+// 命中即非零退出,让 npm run check:docs 能真正失败,拦住硬编码路径提交(此前只打印不失败,检查形同虚设)
 if (hitCount > 0) {
   console.error(`\ncheck:docs 发现 ${hitCount} 处疑似本机绝对路径,请替换为占位符(如 <你的实际路径>)后重新检查。`);
   process.exit(1);

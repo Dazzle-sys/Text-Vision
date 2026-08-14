@@ -12,9 +12,9 @@ import {
 // matchWindow(纯函数,先进程名后标题,精确>前缀>包含)
 // ---------------------------------------------------------------------------
 const WS = [
-  { id: '1', process: 'chrome', title: 'Google Chrome', width: 800, height: 600 },
-  { id: '2', process: 'notepad', title: '未命名 - 记事本', width: 400, height: 300 },
-  { id: '3', process: 'explorer', title: '文件资源管理器', width: 500, height: 400 }
+  { id: '1', process: 'chrome', title: 'Google Chrome' },
+  { id: '2', process: 'notepad', title: '未命名 - 记事本' },
+  { id: '3', process: 'explorer', title: '文件资源管理器' }
 ];
 
 test('matchWindow:空 target 返回 null', () => {
@@ -85,17 +85,57 @@ test('matchWindow:无任何匹配返回 null', () => {
   assert.equal(matchWindow('不存在的程序xyz', WS), null);
 });
 
+// --- 窗口 ID 精确匹配(纯数字 / 0x 十六进制,BigInt 归一化)---
+const ID_WS = [
+  { id: '9831421', process: 'chrome', title: 'Google Chrome' },
+  { id: '456', process: 'notepad', title: '未命名 - 记事本' },
+  { id: '0x01000007', process: 'firefox', title: 'Mozilla Firefox' }
+];
+
+test('matchWindow:target 为纯数字 → 优先精确匹配窗口 id', () => {
+  assert.equal(matchWindow('456', ID_WS).id, '456');
+  assert.equal(matchWindow('9831421', ID_WS).id, '9831421');
+});
+
+test('matchWindow:target 为 0x 十六进制 → 归一化后匹配(跨格式互认)', () => {
+  // '0x1C8' = 456 → 命中 win32 十进制 id '456'
+  assert.equal(matchWindow('0x1C8', ID_WS).id, '456');
+  assert.equal(matchWindow('0X1c8', ID_WS).id, '456', '0x 大小写都应被识别');
+  // 十六进制 id 原文命中
+  assert.equal(matchWindow('0x01000007', ID_WS).id, '0x01000007');
+  // 十进制 16777223 = 0x01000007 → 命中 linux 十六进制 id(反向跨格式)
+  assert.equal(matchWindow('16777223', ID_WS).id, '0x01000007');
+});
+
+test('matchWindow:64 位 HWND 精确匹配不丢精度(BigInt)', () => {
+  const big = [{ id: '9223372036854775807', process: 'x', title: 'y' }];
+  assert.equal(matchWindow('9223372036854775807', big).id, '9223372036854775807');
+  const hexBig = [{ id: '0x7fffffffffffffff', process: 'x', title: 'y' }];
+  assert.equal(matchWindow('9223372036854775807', hexBig).id, '0x7fffffffffffffff');
+});
+
+test('matchWindow:数字 target 未命中 id → 落回进程名/标题模糊匹配', () => {
+  assert.equal(matchWindow('99999', ID_WS), null, '无对应 id 且无名字匹配 → null');
+  // 进程名恰好是纯数字:无 id 命中时仍能按名字匹配,不被 id 分支卡死
+  const numericProc = [{ id: '5', process: '12345', title: '数字进程' }];
+  assert.equal(matchWindow('12345', numericProc).id, '5');
+});
+
+test('matchWindow:0x 单独(无数字)→ 不当作 id,落回模糊匹配', () => {
+  assert.equal(matchWindow('0x', WS), null); // 无进程/标题叫 0x
+});
+
 // ---------------------------------------------------------------------------
 // parseWin32(PowerShell JSON 数组输出)
 // ---------------------------------------------------------------------------
 test('parseWin32:解析 JSON 数组(tab 分隔行)→ 窗口条目', () => {
-  const ws = parseWin32('["123\\tchrome\\tGoogle Chrome\\t800\\t600","456\\tnotepad\\t未命名 - 记事本\\t400\\t300"]');
+  const ws = parseWin32('["123\\tchrome\\tGoogle Chrome\\t0\\t4567","456\\tnotepad\\t未命名 - 记事本"]');
   assert.equal(ws.length, 2);
   assert.equal(ws[0].id, '123');
   assert.equal(ws[0].process, 'chrome');
   assert.equal(ws[0].title, 'Google Chrome');
-  assert.equal(ws[0].width, 800);
-  assert.equal(ws[0].height, 600);
+  assert.equal(ws[0].minimized, false);
+  assert.equal(ws[0].pid, 4567);
 });
 
 test('parseWin32:空输出 / 非 JSON / 空数组 → 防御性返回 []', () => {
@@ -108,35 +148,44 @@ test('parseWin32:空输出 / 非 JSON / 空数组 → 防御性返回 []', () =>
 test('parseWin32:行字段不足时补默认值不崩溃', () => {
   const ws = parseWin32('["789\\tcalc"]');
   assert.equal(ws[0].id, '789');
-  assert.equal(ws[0].width, 0);
+  assert.equal(ws[0].pid, 0);
 });
 
 test('parseWin32:单元素数组(PowerShell 输出裸 JSON 字符串)→ 仍解析出 1 个窗口', () => {
-  // ConvertTo-Json 对单元素数组输出 "123\tchrome\tTitle\t800\t600"(带引号),不是 [...]
-  const ws = parseWin32('"123\\tchrome\\tGoogle Chrome\\t800\\t600"');
+  // ConvertTo-Json 对单元素数组输出 "123\tchrome\tTitle\t0"(带引号),不是 [...]
+  const ws = parseWin32('"123\\tchrome\\tGoogle Chrome\\t0"');
   assert.equal(ws.length, 1);
   assert.equal(ws[0].id, '123');
   assert.equal(ws[0].process, 'chrome');
   assert.equal(ws[0].title, 'Google Chrome');
 });
 
-test('parseWin32:第 6 段 minimized 标记解析(1→true, 0→false, 旧格式无第 6 段→false)', () => {
-  const rows = parseWin32('["1\\tchrome\\tA\\t800\\t600\\t1","2\\tnotepad\\tB\\t400\\t300\\t0","3\\tcalc\\tC\\t300\\t200"]');
+test('parseWin32:第 4 段 minimized 标记解析(1→true, 0→false, 缺段→false)', () => {
+  const rows = parseWin32('["1\\tchrome\\tA\\t1","2\\tnotepad\\tB\\t0","3\\tcalc\\tC"]');
   assert.equal(rows[0].minimized, true);
   assert.equal(rows[1].minimized, false);
-  assert.equal(rows[2].minimized, false, '旧格式无第 6 段应默认 false');
+  assert.equal(rows[2].minimized, false, '缺段应默认 false');
+});
+
+test('parseWin32:第 5 段 pid 解析(缺段 → 0;minimized 位置不变)', () => {
+  const rows = parseWin32('["123\\tchrome\\tA\\t0\\t4567","2\\tnotepad\\tB\\t1"]');
+  assert.equal(rows[0].pid, 4567);
+  assert.equal(rows[1].pid, 0, '缺段应默认 0');
+  assert.equal(rows[0].minimized, false);
+  assert.equal(rows[1].minimized, true, 'minimized 仍应位于第 4 段');
 });
 
 // ---------------------------------------------------------------------------
 // parseMac(swift tab 分隔行)
 // ---------------------------------------------------------------------------
-test('parseMac:解析 tab 行 → 窗口条目(process=owner,尺寸置 0)', () => {
-  const ws = parseMac('123\tGoogle Chrome\t新标签页\n456\tTerminal\ttest');
+test('parseMac:解析 tab 行 → 窗口条目(process=owner,第 4 段 pid)', () => {
+  const ws = parseMac('123\tGoogle Chrome\t新标签页\t7890\n456\tTerminal\ttest');
   assert.equal(ws.length, 2);
   assert.equal(ws[0].id, '123');
   assert.equal(ws[0].process, 'Google Chrome');
   assert.equal(ws[0].title, '新标签页');
-  assert.equal(ws[0].width, 0);
+  assert.equal(ws[0].pid, 7890);
+  assert.equal(ws[1].pid, 0, '缺第 4 段应默认 0');
 });
 
 test('parseMac:空输出 → []', () => {
@@ -150,13 +199,15 @@ test('parseMac:缺 id/owner 的行被过滤', () => {
 // ---------------------------------------------------------------------------
 // parseLinux(wmctrl -lp 输出,/proc/<pid>/comm 读失败留空)
 // ---------------------------------------------------------------------------
-test('parseLinux:解析 wmctrl 行 → id/title;/proc 读不到 → process 空串', () => {
+test('parseLinux:解析 wmctrl 行 → id/title/pid;/proc 读不到 → process 空串', () => {
   const ws = parseLinux('0x01000007  0  12345  myhost  未命名 - 记事本\n0x0200000a  0  1  myhost  gnome-shell');
   assert.equal(ws.length, 2);
   assert.equal(ws[0].id, '0x01000007');
   assert.equal(ws[0].process, ''); // pid 12345 测试机不存在 → comm 读失败 → 空
   assert.equal(ws[0].title, '未命名 - 记事本');
+  assert.equal(ws[0].pid, 12345, 'wmctrl 第 2 列 pid 应落进对象');
   assert.equal(ws[1].title, 'gnome-shell');
+  assert.equal(ws[1].pid, 1);
 });
 
 test('parseLinux:空输出/无标题行 → 过滤', () => {

@@ -123,15 +123,14 @@ args = ["text-vision/src/index.js"]
         "VISION_API_KEY": "你的GLM-4V的Key",
         "VISION_MODEL": "glm-4v-plus",
         "VISION_TIMEOUT": "60000",
-        "VISION_LOG_FILE": "",
-        "VISION_DEFAULT_TARGET": ""
+        "VISION_LOG_FILE": ""
       }
     }
   }
 }
 ```
 
-支持的全部环境变量见 README「配置」一节(`VISION_*` 前缀)。也可以不写 `env`,直接在终端导出后启动(如 `export VISION_API_KEY=...`),二选一即可。示例里的 `VISION_TIMEOUT`、`VISION_LOG_FILE`、`VISION_DEFAULT_TARGET` 均可选,含义见 README 对应小节。
+支持的全部环境变量见 README「配置」一节(`VISION_*` 前缀)。也可以不写 `env`,直接在终端导出后启动(如 `export VISION_API_KEY=...`),二选一即可。示例里的 `VISION_TIMEOUT`、`VISION_LOG_FILE` 均可选,含义见 README 对应小节。
 
 ## 7. 换机器 / 换目录
 
@@ -151,3 +150,4 @@ MCP 配置里**唯一要改的就是 `args` 里的启动路径**。复制项目�
 | 提示"视觉引擎未配置" | 没设 `VISION_*`,按 [第 6 节](#6-用环境变量配置推荐) 注入 `env`(或先 `export`) |
 | 图片路径传相对路径找不到 | 相对路径按 **MCP server 启动目录**解析,建议传绝对路径 |
 | 模型回"我不支持看图/请提供图片路径" | 规则模板未覆盖"粘贴图片"场景。按 docs/auto-invoke.md 2.x 更新项目根 AGENTS.md/CLAUDE.md |
+| 模型不主动截图看界面 | 规则未覆盖"主动截图"场景。按 docs/auto-invoke.md 2.x 更新项目根 AGENTS.md/CLAUDE.md(模板含【主动截图看界面】引导) |

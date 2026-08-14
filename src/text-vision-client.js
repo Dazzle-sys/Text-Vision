@@ -13,8 +13,8 @@ import { redactLocalPath } from './redact.js';
 // 配置读取:全部来自环境变量(VISION_*),环境变量在每次 loadConfig 时实时读取,
 // hook 在 import 前设 env 也生效。无 config.yaml,单靠 env 即可运行。
 // ---------------------------------------------------------------------------
-/** 把环境变量解析成最终配置(纯函数,便于测试)。 */
-export function buildConfig() {
+/** 把环境变量解析成最终配置(env 可注入,便于测试;缺省读全局 process.env)。 */
+export function buildConfig(env = process.env) {
   // 非数字配置回退默认值,避免 Number() 得到 NaN 导致请求"瞬间超时"/图片误判过大;
   // 数值再钳制到合理区间,避免 VISION_TIMEOUT=0(立即超时)、VISION_MAX_IMAGE_MB=-5(全图拒收)这类坑。
   // 空/纯空白串同样回退默认值(与下方 maxTokens 的空串=未配置语义一致,避免 VISION_TIMEOUT='' 被
@@ -25,20 +25,20 @@ export function buildConfig() {
     const n = Number(s);
     return Number.isFinite(n) ? n : fallback;
   };
-  const rawTokens = (process.env.VISION_MAX_TOKENS ?? '').trim();
+  const rawTokens = (env.VISION_MAX_TOKENS ?? '').trim();
   const tokensNum = Number(rawTokens);
   return {
-    apiBase: (process.env.VISION_API_BASE || '').toString().replace(/\/+$/, ''),
-    apiKey: process.env.VISION_API_KEY || '',
-    model: process.env.VISION_MODEL || '',
-    timeoutMs: Math.max(1000, toNum(process.env.VISION_TIMEOUT, 90000)),
-    maxImageMB: Math.max(1, toNum(process.env.VISION_MAX_IMAGE_MB, 10)),
+    apiBase: (env.VISION_API_BASE || '').toString().replace(/\/+$/, ''),
+    apiKey: env.VISION_API_KEY || '',
+    model: env.VISION_MODEL || '',
+    timeoutMs: Math.max(1000, toNum(env.VISION_TIMEOUT, 90000)),
+    maxImageMB: Math.max(1, toNum(env.VISION_MAX_IMAGE_MB, 10)),
     // maxTokens:null = 未配置(由 callVision 按场景取默认);0 = 显式关闭(不发送 max_tokens 字段,
     // 部分 OpenAI 兼容代理不接受该字段,会直接 4xx);正数 = 显式上限。负数/非数字/空视为未配置,
     // 避免手滑设负值把"默认"变成"关闭"
     maxTokens: rawTokens !== '' && Number.isFinite(tokensNum) && tokensNum >= 0 ? tokensNum : null,
     // 失败重试次数(429/5xx/网络瞬时错误),0 表示不重试;限制在 0-5 之间防手滑
-    maxRetries: Math.min(5, Math.max(0, Math.floor(toNum(process.env.VISION_MAX_RETRIES, 1))))
+    maxRetries: Math.min(5, Math.max(0, Math.floor(toNum(env.VISION_MAX_RETRIES, 1))))
   };
 }
 

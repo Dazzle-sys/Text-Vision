@@ -23,9 +23,9 @@ test('logFilePath:配置 VISION_LOG_FILE → 返回配置值(去空白)', () => 
 
 test('appendLog:写入指定路径,内容含时间戳 + 事件类型 + 详情', () => {
   const p = join(dir, 'log.txt');
-  appendLog('screen_capture_degrade', '未找到指定程序:xyz,已回退全屏', { VISION_LOG_FILE: p });
+  appendLog('screen_capture_degrade', '窗口原为最小化,已临时恢复截图后还原', { VISION_LOG_FILE: p });
   const content = readFileSync(p, 'utf8');
-  assert.match(content, /^\d{4}-\d{2}-\d{2}T.*\[screen_capture_degrade\] 未找到指定程序:xyz,已回退全屏\n$/);
+  assert.match(content, /^\d{4}-\d{2}-\d{2}T.*\[screen_capture_degrade\] 窗口原为最小化,已临时恢复截图后还原\n$/);
 });
 
 test('appendLog:连续追加不覆盖', () => {
@@ -80,7 +80,12 @@ const savedDebug = process.env.DEBUG_VISION;
 let errCalls = 0;
 let origError;
 beforeEach(() => { origError = console.error; errCalls = 0; console.error = () => { errCalls++; }; });
-afterEach(() => { console.error = origError; process.env.DEBUG_VISION = savedDebug; });
+afterEach(() => {
+  console.error = origError;
+  // savedDebug 原本未设置(undefined)时不能写回字符串 'undefined',应删除变量
+  if (savedDebug === undefined) delete process.env.DEBUG_VISION;
+  else process.env.DEBUG_VISION = savedDebug;
+});
 
 test('debugLog:DEBUG_VISION=1 时打印到 stderr', () => {
   process.env.DEBUG_VISION = '1';

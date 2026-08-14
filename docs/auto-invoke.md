@@ -2,6 +2,8 @@
 
 MCP server 解决"**能**看图";三层机制解决"**主动**看图"——模型在任务中自己决定调用视觉工具,而非等你手动喂描述。三层逐层增强,按需启用:
 
+> **分工定位**:读图类工具(`describe_image` / `ocr_image`)承接用户**贴图**与本地图片;截图类工具(`screen_capture` / `list_windows`)是给**执行任务的 AI 主动调用做视觉识别**的——模型需要看运行中程序的界面/状态时自己截,不靠用户手动截图。这份"主动截图"引导已内置进模板规则(见 [templates/](../templates/) 的【主动截图看界面】段)。
+
 | 层 | 载体 | 适用工具 | 触发方式 | 可靠性 |
 |---|---|---|---|---|
 | 规则层 | `CLAUDE.md` / `AGENTS.md` | Claude Code + 通用(OpenCode、Cursor、Codex…) | 模型"自觉" | 中(靠模型遵守) |
@@ -75,7 +77,7 @@ echo '{"tool_name":"Read","cwd":"<本仓库绝对路径>","tool_input":{"file_pa
 
 ### 2.1 `CLAUDE.md`(Claude Code 专用,放项目根)
 
-成品模板见 [`templates/CLAUDE.md`](../templates/CLAUDE.md),复制到项目根即可。核心要求:遇图必调 `text-vision` 工具、粘贴图片自行定位不索要路径、验证码/报错截图优先 `ocr_image`、截指定窗口先 `list_windows()` 再 `screen_capture(target=…)`。
+成品模板见 [`templates/CLAUDE.md`](../templates/CLAUDE.md),复制到项目根即可。核心要求:遇图必调 `text-vision` 工具、粘贴图片自行定位不索要路径、验证码/报错截图优先 `ocr_image`;**任务涉及运行中程序的界面/状态时主动 `list_windows()` + `screen_capture(target=…)` 截图观察(目标窗口可能含敏感画面时先问用户)**。
 
 ### 2.2 `AGENTS.md`(OpenCode / Cursor / Gemini CLI / Codex 等通用,放项目根)
 

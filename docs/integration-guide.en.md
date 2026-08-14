@@ -125,15 +125,14 @@ This project **reads no configuration file**; all settings come from env vars (t
         "VISION_API_KEY": "your-GLM-4V-key",
         "VISION_MODEL": "glm-4v-plus",
         "VISION_TIMEOUT": "60000",
-        "VISION_LOG_FILE": "",
-        "VISION_DEFAULT_TARGET": ""
+        "VISION_LOG_FILE": ""
       }
     }
   }
 }
 ```
 
-The complete list of supported env vars is in the README's "Configuration" section. You may also omit the `env` field and `export` the vars in the terminal before starting — either approach is acceptable. The example's `VISION_TIMEOUT`, `VISION_LOG_FILE`, and `VISION_DEFAULT_TARGET` are all optional; their meanings are in the README's corresponding sections.
+The complete list of supported env vars is in the README's "Configuration" section. You may also omit the `env` field and `export` the vars in the terminal before starting — either approach is acceptable. The example's `VISION_TIMEOUT` and `VISION_LOG_FILE` are optional; their meanings are in the README's corresponding sections.
 
 ## 7. Moving Machines / Directories
 
@@ -153,3 +152,4 @@ The **only field to change** in the MCP configuration is the startup path in `ar
 | Tool calls return "vision engine not configured" | The `VISION_*` env vars are not set — inject them into the `env` field per [section 6](#6-configuration-via-environment-variables-recommended), or `export` them first |
 | Relative image paths are not found | Relative paths resolve against **the MCP server's startup directory** — use absolute paths |
 | Model replies "I can't see images / please provide the image path" | The rule template doesn't cover the pasted/dropped-image scenario. Update the project root's `AGENTS.md` / `CLAUDE.md` per docs/auto-invoke.en.md section 2 |
+| Model doesn't proactively capture the screen | The rule doesn't cover the "proactive capture" scenario. Update the project root's `AGENTS.md` / `CLAUDE.md` per docs/auto-invoke.en.md section 2 (the template includes the "Proactively capture screens" guidance) |

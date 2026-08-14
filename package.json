@@ -4,30 +4,13 @@
   "description": "给无视觉文本模型(DeepSeek 等)提供视觉能力的 MCP server:图片/截屏转文字描述",
   "license": "MIT",
   "type": "module",
-  "bin": {
-    "text-vision": "src/index.js"
-  },
-  "files": [
-    "src",
-    "hooks",
-    "templates",
-    "docs",
-    "scripts",
-    "README.md",
-    "README.en.md",
-    "LICENSE"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Dazzle-sys/Text-Vision.git"
-  },
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test --test-concurrency=1",
     "check:docs": "node scripts/check-doc-paths.js",
     "gen:test-image": "node scripts/gen-test-image.js",
     "test:describe": "node -e \"import('./src/text-vision-client.js').then(async m => console.log(JSON.stringify(await m.describeImage('test/test.png'), null, 2)))\"",
-    "test:capture": "node -e \"import('./src/capture-screen.js').then(async m => console.log((await m.captureScreen()).filePath))\""
+    "test:capture": "node -e \"import('./src/list-windows.js').then(async l => { const ws = await l.listWindows(); if (!ws.length) throw new Error('没有枚举到窗口,请先打开一个程序窗口'); const m = await import('./src/capture-screen.js'); console.log((await m.captureScreen({ target: ws[0].id })).filePath); })\""
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",

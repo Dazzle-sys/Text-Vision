@@ -2,7 +2,8 @@
 // 用途:错误消息里的路径替换防刷屏——execFile 报错会回显完整命令行(含 /tmp、盘符等路径),
 // 透传给 MCP 客户端会暴露本机目录结构(含用户名),且占满错误信息。错误/日志用,正常返回文本不脱敏。
 // 两个路径正则同时被 scripts/check-doc-paths.js 复用(文档路径检查),导出同一份避免双源漂移。
-// 无 g 标志(判断用);redactLocalPath 内部用 split/join 全量替换。
+// 路径正则无 g 标志(判断用);redactLocalPath 内部用 split/join 全量替换。
+// 例外:COMMAND_FAILED_RE 带 g 标志、用 .replace()(只替换首个"Command failed: 命令名",参数随首行一起被截断)。
 //
 //  1. Windows 盘符路径(C:\Users\... 或 C:/Users/...)。负向前瞻排除 :// 的 URL scheme 段
 //     (如 https:// 的 "s://"),否则脱敏会把 URL 撕裂成 http[本地路径],破坏诊断信息

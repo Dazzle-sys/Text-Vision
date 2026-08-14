@@ -15,7 +15,7 @@ import { describeImage, ocrImage, isImagePath, loadConfig, isOverSize } from '..
 import { isDirectRun } from '../src/is-direct-run.js';
 
 // hook 场景超时设短些(可被 VISION_TIMEOUT 显式覆盖),避免拖慢模型响应
-// 抽成纯函数便于测试:AGENTS.md 约定"未显式配置时默认 30000",此逻辑是产品行为,别改
+// 抽成纯函数便于测试:hook 场景默认超时 30s 是产品约定(README「配置」与 docs/auto-invoke.md 1.2 节已记录),别改
 export function applyHookDefaults(env = process.env) {
   // 只用 undefined 判断"未配置",不能用 !env.VISION_TIMEOUT:后者会把显式 VISION_TIMEOUT=0 也覆盖成
   // 默认值,与 MCP server 侧 buildConfig 的钳制语义(0 → 下限 1000ms)不一致。

@@ -7,15 +7,26 @@ import { promisify } from 'node:util';
 import { readFileSync } from 'node:fs';
 import { resolvePsExe } from './ps-exe.js';
 import { redactLocalPath } from './redact.js';
+import { CMD_TIMEOUT, SLOW_TIMEOUT } from './consts.js';
 
 const execFileP = promisify(execFile);
-const ENUM_TIMEOUT = 30000;       // Windows/Linux 枚举超时
-const MAC_TIMEOUT = 60000;        // swift 首启编译有 1~2s 延迟,超时放宽
 const MAX_BUFFER = 4 * 1024 * 1024;
 
 /**
+ * 把窗口 id 归一化为十进制字符串,供精确匹配跨格式比较。
+ * Windows HWND 是 64 位十进制指针(parseInt 超 2^53 丢精度),Linux X11 id 是 0x 十六进制,
+ * 两者用 BigInt 归一化到同一形态后比较才可靠(如 '0x1C8' 与 '456' 等价)。
+ * 非数字输入返回 null(不参与 id 匹配,不影响后续模糊匹配)。
+ */
+function normalizeWindowId(id) {
+  try { return BigInt(String(id)).toString(10); } catch { return null; }
+}
+
+/**
  * 按 target 在窗口清单里找最佳匹配(纯函数,可单测)。
- * 先进程名后标题,各自内部按 精确(3) > 前缀(2) > 包含(1) 排序;
+ * target 为窗口 id(纯数字 或 0x 十六进制)时**优先精确匹配 id**(按 BigInt 归一化比较),
+ * 未命中 id 再落回进程名/标题模糊——进程名/标题恰好是纯数字时不会被 id 匹配卡死。
+ * 模糊匹配:先进程名后标题,各自内部按 精确(3) > 前缀(2) > 包含(1) 排序;
  * bestRank 跨两遍保持:进程名**精确**命中(3)时标题无法覆盖(精确已是最高 rank);
  * 进程名仅前缀(2)/包含(1)命中时,标题更高 rank(如精确 3)会覆盖,保证跨来源取最高匹配度。
  * 空 target / 无匹配返回 null。
@@ -23,6 +34,14 @@ const MAX_BUFFER = 4 * 1024 * 1024;
 export function matchWindow(target, windows) {
   const t = String(target ?? '').replace(/^['"]+|['"]+$/g, '').trim().toLowerCase();
   if (!t || !Array.isArray(windows) || windows.length === 0) return null;
+  // 数字形态 target 优先按窗口 id 精确匹配(纯数字或 0x 十六进制,0x 单独不含数字不命中)
+  if (/^(?:0[xX][0-9a-fA-F]+|\d+)$/.test(t)) {
+    const want = normalizeWindowId(t);
+    if (want != null) {
+      const byId = windows.find(w => normalizeWindowId(w.id) === want);
+      if (byId) return byId;
+    }
+  }
   const rank = key => (key === t ? 3 : (key.startsWith(t) ? 2 : (key.includes(t) ? 1 : 0)));
   let best = null;
   let bestRank = 0;
@@ -53,10 +72,8 @@ public class WinEnum {
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
   [DllImport("user32.dll", EntryPoint = "SendMessageTimeout")] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
   [DllImport("user32.dll", EntryPoint = "SendMessageTimeout")] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, StringBuilder lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
-  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
   public static string[] Enumerate() {
     var items = new System.Collections.Generic.List<string>();
     EnumWindows((h, l) => {
@@ -75,12 +92,8 @@ public class WinEnum {
       uint pid; GetWindowThreadProcessId(h, out pid);
       string proc = "";
       try { proc = Process.GetProcessById((int)pid).ProcessName; } catch { }
-      RECT r; GetWindowRect(h, out r);
-      int w = r.Right - r.Left, hh = r.Bottom - r.Top;
-      // 最小化窗口的 GetWindowRect 可能返回任务栏按钮尺寸甚至 0×0:枚举不需要真实尺寸(输出不展示宽高,
-      // screen_capture 也只传 id,捕获端恢复后再取),故对最小化窗口放行,避免丢掉"最小化"这个 target 入口。
-      if (w <= 0 || hh <= 0) { if (!IsIconic(h)) return true; }
-      items.Add(h.ToInt64() + "\\t" + proc + "\\t" + title + "\\t" + w + "\\t" + hh + "\\t" + (IsIconic(h) ? "1" : "0"));
+      // 第 5 段 pid:供 list_windows 展示与"按 PID 精确定位"的 target 选择依据
+      items.Add(h.ToInt64() + "\\t" + proc + "\\t" + title + "\\t" + (IsIconic(h) ? "1" : "0") + "\\t" + pid);
       return true;
     }, IntPtr.Zero);
     return items.ToArray();
@@ -90,7 +103,7 @@ $items = [WinEnum]::Enumerate();
 if ($items.Count -eq 0) { '[]' } else { $items | ConvertTo-Json -Compress }
 `;
 
-export async function listWindowsWin32({ execFileFn = execFileP, timeout = ENUM_TIMEOUT, psExe } = {}) {
+export async function listWindowsWin32({ execFileFn = execFileP, timeout = CMD_TIMEOUT, psExe } = {}) {
   // 与截屏侧共用 resolvePsExe:显式注入优先,否则按 VISION_POWERSHELL → pwsh 探测 → powershell.exe 解析,
   // 保证纯 pwsh(无 5.x)环境下列举与截屏行为一致,而不是两边各自硬编码 exe。
   const { stdout } = await execFileFn(psExe ?? resolvePsExe(), ['-NoProfile', '-NonInteractive', '-Command', WIN_ENUM_PS], {
@@ -109,9 +122,9 @@ export function parseWin32(stdout) {
     // 统一归一成数组再逐行解析,否则单窗口时 list_windows 会误判为"没有可见窗口"
     const rows = Array.isArray(parsed) ? parsed : (typeof parsed === 'string' ? [parsed] : []);
     return rows.map(row => {
-      // 第 6 段是 minimized 标记("1"/"0");旧格式无该段 → 默认 false,向后兼容
-      const [id, process = '', title = '', width = '0', height = '0', minimized = '0'] = String(row).split('\t');
-      return { id, process, title, width: Number(width) || 0, height: Number(height) || 0, minimized: minimized === '1' };
+      // 第 4 段是 minimized 标记("1"/"0");第 5 段是 pid。缺段 → 默认 false/0
+      const [id, process = '', title = '', minimized = '0', pid = '0'] = String(row).split('\t');
+      return { id, process, title, minimized: minimized === '1', pid: Number(pid) || 0 };
     });
   } catch {
     return [];
@@ -128,12 +141,13 @@ for w in info {
   guard layer == 0 else { continue }
   let num = w[kCGWindowNumber as String] as? Int ?? 0
   let owner = w[kCGWindowOwnerName as String] as? String ?? ""
+  let pid = w[kCGWindowOwnerPID as String] as? Int ?? 0
   let title = (w[kCGWindowName as String] as? String ?? "").replacingOccurrences(of: "\\t", with: " ")
-  print("\\(num)\\t\\(owner)\\t\\(title)")
+  print("\\(num)\\t\\(owner)\\t\\(title)\\t\\(pid)")
 }
 `;
 
-export async function listWindowsMac({ execFileFn = execFileP, timeout = MAC_TIMEOUT } = {}) {
+export async function listWindowsMac({ execFileFn = execFileP, timeout = SLOW_TIMEOUT } = {}) {
   const { stdout } = await execFileFn('swift', ['-'], { input: MAC_ENUM_SWIFT, timeout, maxBuffer: MAX_BUFFER });
   const windows = parseMac(stdout);
   if (windows.length > 0 && windows.every(w => !w.title)) {
@@ -142,15 +156,15 @@ export async function listWindowsMac({ execFileFn = execFileP, timeout = MAC_TIM
   return windows;
 }
 
-/** 解析 swift 输出的 tab 分隔行 → 窗口条目;mac 的 CGWindow 枚举拿不到尺寸,置 0。 */
+/** 解析 swift 输出的 tab 分隔行 → 窗口条目。 */
 export function parseMac(stdout) {
   return String(stdout)
     .trim()
     .split(/\r?\n/)
     .filter(Boolean)
     .map(line => {
-      const [id, owner = '', title = ''] = line.split('\t');
-      return { id, process: owner, title, width: 0, height: 0 };
+      const [id, owner = '', title = '', pid = '0'] = line.split('\t');
+      return { id, process: owner, title, pid: Number(pid) || 0 };
     })
     .filter(w => w.id && w.process);
 }
@@ -158,7 +172,7 @@ export function parseMac(stdout) {
 // --- Linux:wmctrl -lp 枚举(需安装 wmctrl 包),进程名读 /proc/<pid>/comm ---
 const WMCTRL_LINE_RE = /^(\S+)\s+\S+\s+(\S+)\s+\S+\s+(.*)$/;
 
-export async function listWindowsLinux({ execFileFn = execFileP, timeout = ENUM_TIMEOUT } = {}) {
+export async function listWindowsLinux({ execFileFn = execFileP, timeout = CMD_TIMEOUT } = {}) {
   let stdout;
   try {
     ({ stdout } = await execFileFn('wmctrl', ['-lp'], { timeout, maxBuffer: MAX_BUFFER }));
@@ -186,7 +200,7 @@ export function parseLinux(stdout) {
       }
       const title = (m[3] || '').replace(/\t/g, ' ');
       if (!title) return null;
-      return { id, process, title, width: 0, height: 0 };
+      return { id, process, title, pid: Number(pid) || 0 };
     })
     .filter(Boolean);
 }

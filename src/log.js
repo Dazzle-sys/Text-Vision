@@ -1,6 +1,6 @@
 // 统一日志出口:stderr 调试日志(DEBUG_VISION=1 门控)+ 落盘日志文件(VISION_LOG_FILE 可配置路径)。
 // MCP server 走 stdio,stdout 是协议通道,调试日志只能走 stderr;降级/异常原因再追加写入日志文件,
-// 方便"指定窗口失败为何回退全屏"这类问题事后排查。日志写入失败一律静默,不拖垮截图主流程。
+// 方便"指定窗口截图失败/降级原因"这类问题事后排查。日志写入失败一律静默,不拖垮截图主流程。
 import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { visionDir } from './repo-root.js';

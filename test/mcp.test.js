@@ -75,13 +75,25 @@ test('tools/list:注册了四个工具,名称与 schema 正确', async () => {
   const screen = tools.find(t => t.name === 'screen_capture');
   assert.equal(screen.inputSchema.properties.target.type, 'string');
   assert.equal(screen.inputSchema.properties.focus.type, 'string');
+  assert.equal(screen.inputSchema.properties.clientArea.type, 'boolean', 'clientArea 应为布尔参数');
   // 全可选字段时 zod 可能省略 required 数组(undefined 等价于空),统一用空数组兜底断言
+  // (target 必填由 handler 校验,不走 zod schema,便于给友好错误文案)
   const required = screen.inputSchema.required || [];
-  assert.ok(!required.includes('target'), 'target 可选');
+  assert.ok(!required.includes('target'), 'target 可选(schema 层)');
   assert.ok(!required.includes('focus'), 'focus 可选');
 
   const listW = tools.find(t => t.name === 'list_windows');
   assert.ok(listW, '应注册 list_windows');
+});
+
+test('tools/call screen_capture:clientArea=true → capture 收到 clientArea(透传)', async () => {
+  const seen = [];
+  const c = await startServer({
+    capture: async (args) => { seen.push(args); return { b64: 'aGk=', mime: 'image/png' }; }
+  });
+  await c.request('tools/call', { name: 'screen_capture', arguments: { target: 'chrome', clientArea: true } });
+  assert.equal(seen[0].target, 'chrome');
+  assert.equal(seen[0].clientArea, true, 'clientArea 应透传给 capture 实现');
 });
 
 test('tools/call describe_image:mock 描述结果原样返回,isError=false', async () => {
@@ -97,28 +109,20 @@ test('tools/call ocr_image:走 OCR 注入实现', async () => {
   assert.equal(res.result.content[0].text, 'OCR:code.png');
 });
 
-test('tools/call screen_capture:截屏 → 描述', async () => {
+test('tools/call screen_capture:不传 target → 明确报错(必须指定 target)', async () => {
   const c = await startServer();
   const res = await c.request('tools/call', { name: 'screen_capture', arguments: {} });
-  assert.equal(res.result.content[0].text, '截图:当前屏幕/UI 界面');
-  assert.equal(res.result.isError, false);
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /必须指定 target/);
+  assert.match(res.result.content[0].text, /list_windows/);
 });
 
-test('tools/call screen_capture:带 target → focus 提示指定的窗口', async () => {
+test('tools/call screen_capture:带 target → 截屏并描述,未降级不写日志', async () => {
   const c = await startServer();
   const res = await c.request('tools/call', { name: 'screen_capture', arguments: { target: 'chrome' } });
   assert.equal(res.result.content[0].text, '截图:指定的窗口:chrome');
   assert.equal(res.result.isError, false);
   assert.deepEqual(c.logs, [], '未降级时不应写日志');
-});
-
-test('tools/call screen_capture:未传 target 且 capture 返回 targetLabel(默认 target 命中)→ focus 提示真实窗口名', async () => {
-  const c = await startServer({
-    capture: async () => ({ b64: 'aGk=', mime: 'image/png', targetLabel: 'Google Chrome' })
-  });
-  const res = await c.request('tools/call', { name: 'screen_capture', arguments: {} });
-  assert.equal(res.result.content[0].text, '截图:指定的窗口:Google Chrome');
-  assert.equal(res.result.isError, false);
 });
 
 test('tools/call screen_capture:显式 target 时 focus 用 target 原文(忽略 targetLabel)→ 契约固化', async () => {
@@ -134,7 +138,7 @@ test('tools/call screen_capture:返回 filePath → 提示截图保存位置(完
   const c = await startServer({
     capture: async () => ({ b64: 'aGk=', mime: 'image/png', filePath: join(repoRoot, '.text-vision', 'screenshots', 'shot-123.jpeg') })
   });
-  const res = await c.request('tools/call', { name: 'screen_capture', arguments: {} });
+  const res = await c.request('tools/call', { name: 'screen_capture', arguments: { target: 'chrome' } });
   assert.match(res.result.content[0].text, /截图已保存到 .*shot-123\.jpeg/);
   assert.ok(res.result.content[0].text.includes(join(repoRoot, '.text-vision', 'screenshots', 'shot-123.jpeg')), '应返回完整绝对路径');
 });
@@ -151,7 +155,7 @@ test('tools/call screen_capture:mock capture 带 filePath → source 拼上截�
       return { ok: true, text: '截图:ok' };
     }
   });
-  const res = await c.request('tools/call', { name: 'screen_capture', arguments: {} });
+  const res = await c.request('tools/call', { name: 'screen_capture', arguments: { target: 'chrome' } });
   assert.equal(res.result.isError, false);
   // capture 带 filePath 时返回文本还会拼 [截图已保存到 ...],用前缀断言只看描述文本
   assert.ok(res.result.content[0].text.startsWith('截图:ok'), '描述文本应为截图:ok');
@@ -159,12 +163,12 @@ test('tools/call screen_capture:mock capture 带 filePath → source 拼上截�
 
 test('tools/call screen_capture:返回 note → 文本含[提示]且 appendLog 落盘 + 日志', async () => {
   const c = await startServer({
-    capture: async () => ({ b64: 'aGk=', mime: 'image/png', note: '未找到与"xyz"匹配的窗口,已回退全屏截图' })
+    capture: async () => ({ b64: 'aGk=', mime: 'image/png', note: '窗口原为最小化,已临时恢复截图后还原' })
   });
   const res = await c.request('tools/call', { name: 'screen_capture', arguments: { target: 'xyz' } });
-  assert.match(res.result.content[0].text, /\[提示\] 未找到与"xyz"匹配的窗口,已回退全屏截图/);
+  assert.match(res.result.content[0].text, /\[提示\] 窗口原为最小化,已临时恢复截图后还原/);
   assert.equal(res.result.isError, false);
-  assert.deepEqual(c.logs, [['screen_capture_degrade', '未找到与"xyz"匹配的窗口,已回退全屏截图']]);
+  assert.deepEqual(c.logs, [['screen_capture_degrade', '窗口原为最小化,已临时恢复截图后还原']]);
 });
 
 test('tools/call screen_capture:描述失败时 note 不拼入返回文本,但日志已写', async () => {
@@ -178,40 +182,42 @@ test('tools/call screen_capture:描述失败时 note 不拼入返回文本,但�
   assert.deepEqual(c.logs, [['screen_capture_degrade', '窗口已最小化']], '降级原因仍已落盘');
 });
 
-test('tools/call list_windows:返回窗口清单 → 文本含标题与进程名', async () => {
+test('tools/call list_windows:返回窗口清单 → 文本含标题、进程、PID 与 ID', async () => {
   const c = await startServer({
     listWindows: async () => [
-      { id: '1', process: 'chrome', title: 'Google Chrome', width: 800, height: 600 },
-      { id: '2', process: 'notepad', title: '未命名 - 记事本', width: 400, height: 300 }
+      { id: '1', process: 'chrome', title: 'Google Chrome', pid: 1234 },
+      { id: '2', process: 'notepad', title: '未命名 - 记事本', pid: 5678 }
     ]
   });
   const res = await c.request('tools/call', { name: 'list_windows', arguments: {} });
   assert.equal(res.result.isError, false);
   assert.match(res.result.content[0].text, /Google Chrome/);
   assert.match(res.result.content[0].text, /进程:chrome/);
+  assert.match(res.result.content[0].text, /PID:1234/, '应显示进程 PID');
+  assert.match(res.result.content[0].text, /ID:1/, '应显示窗口 ID 供 target 直传');
   assert.match(res.result.content[0].text, /未命名 - 记事本/);
 });
 
 test('tools/call list_windows:窗口标题含本机路径 → 原样保留(运行时输出,不入提交)', async () => {
   const c = await startServer({
-    listWindows: async () => [{ id: '1', process: 'explorer', title: 'C:\\Users\\someone\\Desktop\\a.txt', width: 500, height: 400 }]
+    listWindows: async () => [{ id: '1', process: 'explorer', title: 'C:\\Users\\someone\\Desktop\\a.txt' }]
   });
   const res = await c.request('tools/call', { name: 'list_windows', arguments: {} });
   assert.match(res.result.content[0].text, /C:\\Users\\someone\\Desktop\\a\.txt/, '窗口标题应原样返回');
   assert.ok(!res.result.content[0].text.includes('[本地路径]'), '不应再替换为占位符');
 });
 
-test('tools/call list_windows:最小化窗口 → 标注 (已最小化),未最小化窗口不标注', async () => {
+test('tools/call list_windows:最小化窗口 → 标注 已最小化,未最小化窗口不标注', async () => {
   const c = await startServer({
     listWindows: async () => [
-      { id: '1', process: 'chrome', title: 'Google Chrome', width: 800, height: 600 },
-      { id: '2', process: 'notepad', title: '未命名 - 记事本', width: 400, height: 300, minimized: true }
+      { id: '1', process: 'chrome', title: 'Google Chrome' },
+      { id: '2', process: 'notepad', title: '未命名 - 记事本', minimized: true }
     ]
   });
   const res = await c.request('tools/call', { name: 'list_windows', arguments: {} });
   assert.equal(res.result.isError, false);
-  assert.ok(res.result.content[0].text.includes('未命名 - 记事本 (进程:notepad) (已最小化)'), '最小化窗口应标注 (已最小化)');
-  assert.ok(!res.result.content[0].text.includes('Google Chrome (进程:chrome) (已最小化)'), '未最小化窗口不应标注');
+  assert.ok(res.result.content[0].text.includes('未命名 - 记事本 (进程:notepad 已最小化)'), '最小化窗口应标注 已最小化');
+  assert.ok(!res.result.content[0].text.includes('Google Chrome (进程:chrome 已最小化)'), '未最小化窗口不应标注');
 });
 
 test('tools/call list_windows:空清单 → isError=true 且提示可能原因', async () => {
@@ -264,7 +270,7 @@ test('tools/call screen_capture:capture 返回 undefined → 明确错误而非 
   const c = await startServer({
     capture: async () => undefined
   });
-  const res = await c.request('tools/call', { name: 'screen_capture', arguments: {} });
+  const res = await c.request('tools/call', { name: 'screen_capture', arguments: { target: 'chrome' } });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /未返回有效的图片数据/);
 });
@@ -273,7 +279,7 @@ test('tools/call screen_capture:capture 抛含路径异常 → 兜底统一错�
   const c = await startServer({
     capture: async () => { throw new Error('截屏失败: C:\\Users\\someone\\Desktop\\a.png'); }
   });
-  const res = await c.request('tools/call', { name: 'screen_capture', arguments: {} });
+  const res = await c.request('tools/call', { name: 'screen_capture', arguments: { target: 'chrome' } });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /截屏失败/);
   assert.ok(!res.result.content[0].text.includes('C:\\Users\\someone'), '本机路径应被脱敏');
@@ -308,7 +314,7 @@ test('tools/call screen_capture:真实 describeImageFromBase64 链路(不注入 
     const c = makeClient(clientT);
     await c.request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1.0.0' } });
     c.notify('notifications/initialized');
-    const res = await c.request('tools/call', { name: 'screen_capture', arguments: {} });
+    const res = await c.request('tools/call', { name: 'screen_capture', arguments: { target: 'chrome' } });
     assert.equal(res.result.isError, false);
     assert.match(res.result.content[0].text, /屏幕上有任务栏和窗口/);
   } finally {

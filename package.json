@@ -1,6 +1,6 @@
 {
   "name": "text-vision",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "给无视觉文本模型(DeepSeek 等)提供视觉能力的 MCP server:图片/截屏转文字描述",
   "license": "MIT",
   "type": "module",

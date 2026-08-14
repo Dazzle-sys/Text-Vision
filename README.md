@@ -47,6 +47,8 @@
 npm install
 ```
 
+> 项目同步发布 npm 包 `text-vision`(含运行代码、文档与模板,不含本地开发脚本),远程场景可 `npm install -g text-vision`;以下说明均基于本地仓库方式。
+
 ## 配置
 
 全部通过环境变量配置(`VISION_*` 前缀),**无需任何配置文件**。最简使用(终端导出,或写进接入工具的 MCP 配置 `env` 字段,见 [docs/integration-guide.md](docs/integration-guide.md) 第 6 节):

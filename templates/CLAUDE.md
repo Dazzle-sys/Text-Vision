@@ -16,4 +16,4 @@
 - `list_windows()` — 当前打开的窗口清单(窗口 ID+标题+进程名+PID,含最小化)
 - `screen_capture(target, focus?, clientArea?)` — 截**指定窗口**并描述,用法见【主动截图看界面】
 
-若已配置 PreToolUse hook(见本项目 docs/auto-invoke.md),读图会自动被拦截转成描述,本规则作为双保险。
+若已配置 PreToolUse hook(详见 text-vision 仓库的 docs/auto-invoke.md),读图会自动被拦截转成描述,本规则作为双保险。

@@ -79,7 +79,7 @@ node src/index.js
 | `VISION_MAX_IMAGE_MB` | `10` | Image size limit (MB), floor 1. **Oversized local images are auto-compressed to JPEG before sending** (macOS sips / Linux ImageMagick / Windows PowerShell, best-effort; errors out only if compression is unavailable or still oversize) |
 | `VISION_MAX_TOKENS` | scenario default | Per-request output token cap: unset → describe 2048 / OCR 4096; `0` → omit the field (some proxies reject it); positive → explicit cap |
 | `VISION_MAX_RETRIES` | `1` | Failed-request retries, `0` disables, cap 5 |
-| `VISION_CACHE_SIZE` | `0` | Successful-result memory cache cap (0 = off). Same image + same prompt hits the cache and skips a vision call; process-memory only, never persisted, cleared on restart |
+| `VISION_CACHE_SIZE` | `0` | Successful-result memory cache cap (0 = off). Same image + same prompt hits the cache and skips a vision call; process-memory only, never persisted, cleared on restart. With multi-endpoint fallback, a cache hit returns the earlier successful result (possibly from a backup endpoint) without re-probing health — disable the cache when you need live failover |
 | `VISION_LOG_FILE` | `.text-vision/log.txt` under this repo's root | Diagnostic log file path (failures/successes/capture notes are appended; set a writable path when the repo is installed in a read-only location) |
 | `VISION_LOG_SUCCESS` | `1` | Whether successful calls are logged; set `0`/`false` to disable (failures are always logged). Check is lenient: any value other than `0`/`false` enables it |
 | `VISION_SHOTS_DIR` | `.text-vision/screenshots` under this repo's root | Screenshot directory (last 20 auto-pruned; don't share with other uses) |

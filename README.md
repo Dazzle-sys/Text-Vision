@@ -79,7 +79,7 @@ node src/index.js
 | `VISION_MAX_IMAGE_MB` | `10` | 图片大小上限(MB),下限 1。**超限的本地图片会自动压缩为 JPEG 再发送**(平台工具:macOS sips / Linux ImageMagick / Windows PowerShell,尽力而为;压缩不可用或仍超限才报错) |
 | `VISION_MAX_TOKENS` | 场景默认 | 单次输出 token 上限:不设则描述 2048 / OCR 4096;设 `0` 表示不发送该字段(部分代理不接受会报错);正数指定上限 |
 | `VISION_MAX_RETRIES` | `1` | 失败重试次数,0 不重试,上限 5 |
-| `VISION_CACHE_SIZE` | `0` | 成功结果内存缓存条数上限(0=关闭)。同图+同提示词重复调用时命中缓存,省一次视觉调用;仅存本进程内存、不落盘,重启即清 |
+| `VISION_CACHE_SIZE` | `0` | 成功结果内存缓存条数上限(0=关闭)。同图+同提示词重复调用时命中缓存,省一次视觉调用;仅存本进程内存、不落盘,重启即清。多端点 fallback 下命中返回先前成功结果(可能来自备用端点),不触发实时探测,需实时切换时关闭缓存 |
 | `VISION_LOG_FILE` | 本仓库根 `.text-vision/log.txt` | 诊断日志文件路径(失败/成功/截屏提示都会追加写入;仓库装在只读位置时设此变量指向可写目录) |
 | `VISION_LOG_SUCCESS` | `1` | 是否写成功日志,设 `0`/`false` 关闭(失败日志始终写)。判定宽松:除 `0`/`false` 外任意值都视为开启 |
 | `VISION_SHOTS_DIR` | 本仓库根 `.text-vision/screenshots` | 截屏落盘目录(最近 20 张自动清理,勿与其它用途共享) |

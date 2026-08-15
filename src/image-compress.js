@@ -35,7 +35,7 @@ try {
   $nh = [Math]::Max(1, [int]($img.Height * $scale));
   $bmp = New-Object System.Drawing.Bitmap $nw, $nh;
   $g = [System.Drawing.Graphics]::FromImage($bmp);
-  $g.InterpolationMode = 'HighQualityBicubic';
+  $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic;
   $g.DrawImage($img, 0, 0, $nw, $nh);
   $enc = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' };
   $params = New-Object System.Drawing.Imaging.EncoderParameters(1);

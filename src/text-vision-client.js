@@ -214,7 +214,9 @@ export function clearVisionCache() {
 }
 
 function cacheKey(cfg, b64, promptText, ocr) {
-  // apiBase 取 cfg.apiBases[0](主端点)还是全部?缓存语义是"同配置同图同问",主端点即代表配置,取一个即可
+  // key 只取主端点(apiBases[0]):缓存语义是"同配置同图同问",主端点即代表配置。
+  // 注意:多端点 fallback 下命中缓存,返回的是先前某次成功(可能来自备用端点)的结果,不再重新探测端点健康;
+  // 需要"每次请求都实时探测端点可用性"的场景应关闭缓存(VISION_CACHE_SIZE=0)。
   return createHash('sha256')
     .update(cfg.apiBase || '')
     .update('\u0000').update(cfg.model || '')

@@ -42,14 +42,23 @@ MCP 注册好≠ hook 生效。hook 要在 Claude Code 的 `settings.json` 里�
           { "type": "command", "command": "node text-vision/hooks/read-image-hook.js" }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node text-vision/hooks/paste-image-hook.js" }
+        ]
+      }
     ]
   }
 }
 ```
 
-- `matcher: "Read"` 让 hook 只拦截 `Read`,不干扰其他工具
+- `PreToolUse` 配 `matcher: "Read"` 只拦截模型主动 `Read` 图片;**`UserPromptSubmit` 拦截用户粘贴/拖入的图片**(消息里带 `[Image N] 路径` 或 markdown 图片时,自动转文字注入)。两者互补,可单独启用其一
 - 改完配置**重启 Claude Code** 生效
 - 也可放用户级 `~/.claude/settings.json`(所有项目生效),路径同理
+
+> **更快的方式:插件安装(一步注册两条 hook + 技能)**。仓库是 Claude Code 插件,`claude plugin install <本仓库绝对路径>` 后自动启用 `UserPromptSubmit` + `PreToolUse` 两条 hook 与 `skills/` 技能,无需手动写上面的 JSON(见 [../README.md](../README.md) 安装节)。手动注册方式适用于只想用其中一条 hook 的场景。
 
 ### 1.2 行为细节
 
@@ -58,11 +67,21 @@ MCP 注册好≠ hook 生效。hook 要在 Claude Code 的 `settings.json` 里�
 - **失败放行**:配置缺失、请求失败、超时等**都不阻断工作**,打印错误后放行原始 Read。此时文本模型仍会拿到图片二进制——规则层就是兜底。
 - **超时**:hook 场景默认 30s(`VISION_TIMEOUT` 可覆盖),避免拖慢模型响应。`VISION_MAX_RETRIES` 会放大总耗时,见 README「配置」节。
 
+#### 粘贴图 hook 专属行为(`paste-image-hook.js`)
+
+- **不阻断**:`UserPromptSubmit` 是附加内容事件,注入描述但不改用户消息,永远 exit 0。
+- **图片来源**:优先宿主结构化的 `images` 数组;没有则从消息文本提取 `[Image N] 路径` 与 markdown `![alt](path)` 两种形态(不做裸路径猜测,避免误匹配代码字符串)。
+- **数量上限**:单次提交最多自动描述 **4 张**,超出部分由规则层引导模型自行调工具。
+- **失败静默**:任何一张图识别失败/超限/不存在都跳过,不影响其余图片与消息本身。
+
 ### 1.3 手动验证 hook
 
 ```bash
+# 读图 hook:图片 → deny + 【图片视觉描述】;把 file_path 换成任意 .txt → allow
 echo '{"tool_name":"Read","cwd":"<本仓库绝对路径>","tool_input":{"file_path":"test/test.png"}}' | node hooks/read-image-hook.js
-# 图片 → deny + 【图片视觉描述】;把 file_path 换成任意 .txt → allow
+
+# 粘贴图 hook:prompt 带图片路径 → 注入【粘贴图片视觉描述】;不带 → 空输出
+echo '{"prompt":"分析这张图 [Image 1] test/test.png","cwd":"<本仓库绝对路径>"}' | node hooks/paste-image-hook.js
 ```
 
 > 验证前需先设 `VISION_*` 环境变量,否则视觉请求失败会**放行**(不会 deny,见「失败放行」)。

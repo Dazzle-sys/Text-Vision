@@ -44,14 +44,23 @@ Registering the MCP server does not activate the hook; declare it separately in 
           { "type": "command", "command": "node text-vision/hooks/read-image-hook.js" }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node text-vision/hooks/paste-image-hook.js" }
+        ]
+      }
     ]
   }
 }
 ```
 
-- `matcher: "Read"` restricts the hook to `Read` only, without affecting other tools
+- `PreToolUse` with `matcher: "Read"` intercepts only model-initiated `Read` on images; **`UserPromptSubmit` intercepts pasted/dropped images** (when the message carries `[Image N] path` or a markdown image, it auto-converts to a text description). The two are complementary — enable either one on its own.
 - **Restart Claude Code** after changing the config
 - A user-level `~/.claude/settings.json` (all projects) is also supported
+
+> **Faster path: plugin install (registers both hooks + skill in one step)**. The repo is a Claude Code plugin — `claude plugin install <absolute repo path>` auto-enables `UserPromptSubmit` + `PreToolUse` and the `skills/` skill, so no manual JSON above is needed (see the README "Installation" section). Manual registration suits scenarios where you want only one of the hooks.
 
 ### 1.2 Behavior Details
 
@@ -63,8 +72,11 @@ Registering the MCP server does not activate the hook; declare it separately in 
 ### 1.3 Verifying the Hook Manually
 
 ```bash
+# Read hook: image → deny + 【图片视觉描述】; replace file_path with any .txt → allow
 echo '{"tool_name":"Read","cwd":"<absolute repo path>","tool_input":{"file_path":"test/test.png"}}' | node hooks/read-image-hook.js
-# image → deny + 【图片视觉描述】; replace file_path with any .txt → allow
+
+# Paste hook: prompt with an image path → injects 【粘贴图片视觉描述】; without one → empty output
+echo '{"prompt":"分析这张图 [Image 1] test/test.png","cwd":"<absolute repo path>"}' | node hooks/paste-image-hook.js
 ```
 
 > Set the `VISION_*` env vars first; otherwise the vision request fails and the hook **lets the `Read` through** (no deny — see "Fail open").

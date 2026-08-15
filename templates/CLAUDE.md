@@ -11,9 +11,9 @@
 护栏:截图会上传第三方视觉 API,窗口含密码/账号/聊天记录/证件等敏感画面时**先问用户再截**;找不到匹配窗口会明确报错,先确认目标进程在跑,不要瞎编界面内容。
 
 工具:
-- `describe_image(path, focus?)` — 描述图片(主体/颜色/布局/图中文字)
-- `ocr_image(path)` — 提取图中文字,保留排版
+- `describe_image(path, focus?, prompt?)` — 描述图片(主体/颜色/布局/图中文字);`prompt` 传完整提问时原样作发给视觉模型的 user 消息(覆盖 focus 与默认句式)
+- `ocr_image(path, prompt?)` — 提取图中文字,保留排版
 - `list_windows()` — 当前打开的窗口清单(窗口 ID+标题+进程名+PID,含最小化)
-- `screen_capture(target, focus?, clientArea?)` — 截**指定窗口**并描述,用法见【主动截图看界面】
+- `screen_capture(target, focus?, clientArea?, prompt?)` — 截**指定窗口**并描述,用法见【主动截图看界面】
 
 若已配置 PreToolUse hook(详见 text-vision 仓库的 docs/auto-invoke.md),读图会自动被拦截转成描述,本规则作为双保险。

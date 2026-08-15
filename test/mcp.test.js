@@ -66,21 +66,26 @@ test('tools/list:注册了四个工具,名称与 schema 正确', async () => {
   const describe = tools.find(t => t.name === 'describe_image');
   assert.equal(describe.inputSchema.properties.path.type, 'string');
   assert.equal(describe.inputSchema.properties.focus.type, 'string');
+  assert.equal(describe.inputSchema.properties.prompt.type, 'string', 'describe_image 应有 prompt 参数');
   assert.ok(!describe.inputSchema.required.includes('focus'), 'focus 可选');
+  assert.ok(!describe.inputSchema.required.includes('prompt'), 'prompt 可选');
 
   const ocr = tools.find(t => t.name === 'ocr_image');
   assert.equal(ocr.inputSchema.properties.path.type, 'string');
+  assert.equal(ocr.inputSchema.properties.prompt.type, 'string', 'ocr_image 应有 prompt 参数');
   assert.deepEqual(ocr.inputSchema.required, ['path']);
 
   const screen = tools.find(t => t.name === 'screen_capture');
   assert.equal(screen.inputSchema.properties.target.type, 'string');
   assert.equal(screen.inputSchema.properties.focus.type, 'string');
+  assert.equal(screen.inputSchema.properties.prompt.type, 'string', 'screen_capture 应有 prompt 参数');
   assert.equal(screen.inputSchema.properties.clientArea.type, 'boolean', 'clientArea 应为布尔参数');
   // 全可选字段时 zod 可能省略 required 数组(undefined 等价于空),统一用空数组兜底断言
   // (target 必填由 handler 校验,不走 zod schema,便于给友好错误文案)
   const required = screen.inputSchema.required || [];
   assert.ok(!required.includes('target'), 'target 可选(schema 层)');
   assert.ok(!required.includes('focus'), 'focus 可选');
+  assert.ok(!required.includes('prompt'), 'prompt 可选');
 
   const listW = tools.find(t => t.name === 'list_windows');
   assert.ok(listW, '应注册 list_windows');
@@ -116,6 +121,41 @@ test('tools/call ocr_image:走 OCR 注入实现', async () => {
   const c = await startServer();
   const res = await c.request('tools/call', { name: 'ocr_image', arguments: { path: 'code.png' } });
   assert.equal(res.result.content[0].text, 'OCR:code.png');
+});
+
+test('tools/call describe_image:传 prompt → mock describe 收到 (path, focus, prompt)', async () => {
+  const seen = [];
+  const c = await startServer({
+    describe: async (path, focus, prompt) => { seen.push({ path, focus, prompt }); return { ok: true, text: 'ok' }; }
+  });
+  const res = await c.request('tools/call', { name: 'describe_image', arguments: { path: 'a.png', prompt: '这个图标是什么?' } });
+  assert.equal(res.result.isError, false);
+  assert.deepEqual(seen, [{ path: 'a.png', focus: undefined, prompt: '这个图标是什么?' }], 'prompt 应原样透传给实现层');
+});
+
+test('tools/call ocr_image:传 prompt → mock ocr 收到 (path, prompt)', async () => {
+  const seen = [];
+  const c = await startServer({
+    ocr: async (path, prompt) => { seen.push({ path, prompt }); return { ok: true, text: 'ok' }; }
+  });
+  const res = await c.request('tools/call', { name: 'ocr_image', arguments: { path: 'code.png', prompt: '提取所有中文' } });
+  assert.equal(res.result.isError, false);
+  assert.deepEqual(seen, [{ path: 'code.png', prompt: '提取所有中文' }], 'prompt 应原样透传给实现层');
+});
+
+test('tools/call screen_capture:传 prompt → describeBase64 第 7 位收到原样 prompt、第 3 位 focus 仍为默认句式', async () => {
+  const seen = [];
+  const c = await startServer({
+    describeBase64: async (b64, mime, focus, cfg, source, sourceLabel, prompt) => {
+      assert.equal(cfg, undefined, 'cfg 必须显式 undefined 占位');
+      seen.push({ b64, mime, focus, cfg, source, sourceLabel, prompt });
+      return { ok: true, text: '截图:ok' };
+    }
+  });
+  const res = await c.request('tools/call', { name: 'screen_capture', arguments: { target: 'chrome', prompt: '看这个窗口的布局' } });
+  assert.equal(res.result.isError, false);
+  assert.equal(seen[0].focus, '指定的窗口:chrome', '第 3 位 focus 仍为默认句式(供无 prompt 时模板兜底)');
+  assert.equal(seen[0].prompt, '看这个窗口的布局', '第 7 位 prompt 原样透传');
 });
 
 test('tools/call screen_capture:不传 target → 明确报错(必须指定 target)', async () => {

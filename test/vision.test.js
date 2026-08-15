@@ -342,6 +342,51 @@ test('ocrImage 走 OCR 提示词(mock fetch 校验请求体)', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// 调用者提供的完整提示词(prompt):原样作为 user 消息,不走固定模板
+// ---------------------------------------------------------------------------
+test('describeImage 传 prompt → user 消息原样等于 prompt,不被模板包裹', async () => {
+  const s = stubFetch(() => okRes('描述成功'));
+  try {
+    const r = await describeImage('test/test.png', null, '这个图标代表什么含义?');
+    assert.equal(r.ok, true);
+    const body = JSON.parse(s.calls[0].opts.body);
+    assert.equal(body.messages[1].content[0].text, '这个图标代表什么含义?');
+    assert.match(body.messages[0].content, /视觉描述助手/, '系统提示词仍为固定描述护栏,不受 prompt 影响');
+  } finally { s.restore(); }
+});
+
+test('ocrImage 传 prompt → user 消息原样等于 prompt,系统仍为 OCR、max_tokens 4096', async () => {
+  const s = stubFetch(() => okRes('文字'));
+  try {
+    const r = await ocrImage('test/test.png', '提取图中所有中文并保留表格排版');
+    assert.equal(r.ok, true);
+    const body = JSON.parse(s.calls[0].opts.body);
+    assert.equal(body.messages[1].content[0].text, '提取图中所有中文并保留表格排版');
+    assert.match(body.messages[0].content, /OCR 文字提取助手/, '系统提示词仍为 OCR');
+    assert.equal(body.max_tokens, 4096, 'OCR 场景默认输出上限不变');
+  } finally { s.restore(); }
+});
+
+test('describeImageFromBase64 传 prompt(第 7 位)→ user 消息原样等于 prompt', async () => {
+  const s = stubFetch(() => okRes('图表分析'));
+  try {
+    const r = await describeImageFromBase64(B64, 'image/png', null, CFG, undefined, undefined, '分析这张图表的坐标轴与趋势');
+    assert.equal(r.ok, true);
+    const body = JSON.parse(s.calls[0].opts.body);
+    assert.equal(body.messages[1].content[0].text, '分析这张图表的坐标轴与趋势');
+  } finally { s.restore(); }
+});
+
+test('prompt 为空白 → 视为未传,回退 focus 模板', async () => {
+  const s = stubFetch(() => okRes('x'));
+  try {
+    await describeImageFromBase64(B64, 'image/png', '关注颜色', CFG, undefined, undefined, '   ');
+    const body = JSON.parse(s.calls[0].opts.body);
+    assert.match(body.messages[1].content[0].text, /重点关注:关注颜色/, '空白 prompt 应回退到 focus 默认句式');
+  } finally { s.restore(); }
+});
+
+// ---------------------------------------------------------------------------
 // 日志落盘:视觉调用失败必写、成功默认写(VISION_LOG_SUCCESS=0 关闭),写入 VISION_LOG_FILE
 // ---------------------------------------------------------------------------
 test('HTTP 失败 → 写 [vision_failed],含 HTTP 状态与模型', async () => {

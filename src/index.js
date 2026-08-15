@@ -67,11 +67,12 @@ export function createServer(deps = {}) {
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         path: z.string().describe(`本地图片路径(${SUPPORTED_EXTS_TEXT})`),
-        focus: z.string().optional().describe('关注的要点,如"按钮的颜色""图表坐标轴含义""界面元素"')
+        focus: z.string().optional().describe('关注的要点,如"按钮的颜色""图表坐标轴含义""界面元素"'),
+        prompt: z.string().optional().describe('调用者提供的完整提示词,非空时原样作为发给视觉模型的提问(覆盖 focus 与默认句式);不传则用默认描述提示词')
       })
     },
-    wrapTool('描述图片', async ({ path, focus }) => {
-      const r = await describe(path, focus);
+    wrapTool('描述图片', async ({ path, focus, prompt }) => {
+      const r = await describe(path, focus, prompt);
       return textResult(r);
     })
   );
@@ -83,12 +84,13 @@ export function createServer(deps = {}) {
       description: '提取图片中的文字(OCR),保留排版顺序。适合验证码、报错截图、文档截图。用户粘贴/拖入的截图通常已被宿主工具保存为本地文件:有路径直接传;只有文件名时,本工具按路径直接读取本地文件、不做文件搜索,请先用宿主工具定位该文件后传完整路径。图片内容会发送到第三方视觉 API 处理。',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        path: z.string().describe(`本地图片路径(${SUPPORTED_EXTS_TEXT})`)
+        path: z.string().describe(`本地图片路径(${SUPPORTED_EXTS_TEXT})`),
+        prompt: z.string().optional().describe('调用者提供的完整提示词,非空时原样作为发给视觉模型的提问(仍走 OCR 场景语义);不传则用默认 OCR 提示词')
       })
     },
     // 'OCR ' 尾随空格:英文缩写与中文"失败"之间保留空格(原手写文案如此)
-    wrapTool('OCR ', async ({ path }) => {
-      const r = await ocr(path);
+    wrapTool('OCR ', async ({ path, prompt }) => {
+      const r = await ocr(path, prompt);
       return textResult(r);
     })
   );
@@ -101,11 +103,12 @@ export function createServer(deps = {}) {
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         focus: z.string().optional().describe('关注的要点,如"当前界面布局""错误弹窗内容"'),
+        prompt: z.string().optional().describe('调用者提供的完整提示词,非空时原样作为发给视觉模型的提问(覆盖 focus 与默认句式);不传则用 focus 或"指定的窗口:{target}"'),
         target: z.string().optional().describe('必填:要截取的程序/窗口——窗口 ID、进程名或窗口标题(如 456、chrome、未命名 - 记事本),模糊匹配。被遮挡/最小化窗口也能截到本体内容(该能力仅 Windows 生效;macOS 对被遮挡窗口可能截到遮挡层、最小化到 Dock 的窗口无法枚举)。找不到匹配窗口时明确报错。'),
         clientArea: z.boolean().optional().describe('(仅 Windows 生效)为 true 时截窗口客户区(去边框和标题栏),视觉描述聚焦窗口内容;macOS/Linux 忽略此参数')
       })
     },
-    wrapTool('截屏', async ({ focus, target, clientArea }) => {
+    wrapTool('截屏', async ({ focus, target, clientArea, prompt }) => {
       // target 必填:本工具只截指定窗口,不再支持全屏/默认窗口。空白 target 也给友好错误,而非走到枚举
       if (!target || !String(target).trim()) {
         return textResult({ ok: false, text: NO_TARGET_MSG });
@@ -125,12 +128,14 @@ export function createServer(deps = {}) {
       }
       // 第 4 参是 cfg(缺省走 loadConfig 读 env,这里显式 undefined 占位),第 5 参 source 用于失败日志定位
       // (拼上截图落盘路径,失败时可查是哪个截图文件)、第 6 参 sourceLabel 用于成功日志(纯标签'截屏',不含路径)。
+      // 第 7 参 prompt 透传:调用者提供的完整提示词,由 buildUserPrompt 原样作 user 消息(覆盖 focusText),
+      // 不能折进 focusText——那会被固定模板二次包裹,违背"原样发送"。
       // 切勿把 source 直接放第 4 位——cfg 会被字符串污染,describeImageFromBase64 误判"视觉引擎未配置"。
       const src = shot?.filePath ? `截屏 ${shot.filePath}` : '截屏';
       // focus 提示词:显式传 focus 用它;否则用 target 原文(窗口 ID/进程名/标题)。target 必填(handler 已校验),
       // 历史契约:显式 target 用原文而非命中的真实窗口名(targetLabel),不额外枚举/不改变提示来源。
       const focusText = focus || `指定的窗口:${target}`;
-      const r = await describeBase64(shot.b64, shot.mime, focusText, undefined, src, '截屏');
+      const r = await describeBase64(shot.b64, shot.mime, focusText, undefined, src, '截屏', prompt);
       // 描述成功才把降级提示拼进返回文本;描述失败时文本是错误文案,note 已通过日志(文件+stderr)传达
       const hint = r.ok && shot?.note ? `\n\n[提示] ${shot.note}` : '';
       // 截图保留在仓库 .text-vision/screenshots(最近 20 张),直接给完整路径方便打开(运行时输出,不入提交)

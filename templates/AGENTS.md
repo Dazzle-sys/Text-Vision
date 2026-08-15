@@ -2,10 +2,10 @@
 
 This machine uses a text-only model (e.g. DeepSeek) that cannot see images. For any image / screenshot / screen / UI, use the `text-vision` tools — never read image bytes:
 
-- `describe_image(path, focus?)` — describe an image
-- `ocr_image(path)` — extract text (OCR)
+- `describe_image(path, focus?, prompt?)` — describe an image (`prompt`, when given, is sent verbatim to the vision model as the full question, overriding `focus` and the default wording)
+- `ocr_image(path, prompt?)` — extract text (OCR)
 - `list_windows()` — list open windows (window ID + title + process + PID; minimized ones included)
-- `screen_capture(target, focus?, clientArea?)` — capture a **specific window** and describe it (see below). No match errors out — no full-screen capture
+- `screen_capture(target, focus?, clientArea?, prompt?)` — capture a **specific window** and describe it (see below). No match errors out — no full-screen capture
 
 **Pasted / dropped images**: the host has saved the file locally, and the message usually carries the path or filename. Do NOT reply "I can't see images" and do NOT ask for the path. Locate it yourself (use the message path, or search temp / project dirs for recent images), then call `describe_image(path)` — or `ocr_image(path)` for captchas / error / document screenshots.
 

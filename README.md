@@ -25,7 +25,7 @@
 >
 > 1. **别对敏感画面用**:含密码/账号/聊天记录/证件/银行卡等的画面请勿读取或截图。
 > 2. **`screen_capture` 只截指定窗口**:必须传 `target`(窗口 ID/进程名/标题)指定要截的程序,不会截全屏(详见 [跨平台截屏说明](#跨平台截屏说明))。
-> 3. **截图留在本机**:存于本仓库 `.text-vision/screenshots/`(最近 20 张,自动清最旧,已 gitignore)。该目录同机其他用户可能可读,敏感画面用过后请手动删除。
+> 3. **截图留在本机**:存于本仓库 `.text-vision/screenshots/`(最近 20 张,自动清最旧,已 gitignore);仓库只读安装时自动回退到用户主目录 `~/.text-vision/`(日志同理)。该目录同机其他用户可能可读,敏感画面用过后请手动删除。
 > 4. **返回文本可能带本机信息**:`screen_capture` 返回含截图路径,`list_windows` 原样返回窗口标题(可能含本机路径)。若文本模型是远程 API,这些会随对话发给服务商。
 
 ## 目录
@@ -44,10 +44,10 @@
 
 ## 快速开始
 
-需要 **Node.js ≥ 20**(基于 Node 内置 `fetch` 与 `node:test`)。三步跑起来:
+需要 **Node.js ≥ 20**(基于 Node 内置 `fetch` 与 `node:test`)。两步跑起来:
 
 ```bash
-# 1. 安装依赖(本项目是本地仓库,已在本地)
+# 1. 安装依赖
 npm install
 
 # 2. 配置视觉引擎(三个必填环境变量;也可写进接入工具的 MCP 配置 env,见「配置」)
@@ -55,18 +55,15 @@ export VISION_API_BASE="https://dashscope.aliyuncs.com/compatible-mode/v1"
 export VISION_API_KEY="sk-你的Key"
 export VISION_MODEL="qwen-vl-max"   # 模型名必须全小写
 
-# 3. 启动 MCP server
-node src/index.js
 ```
 
-启动后,在任意支持 MCP 的 AI 工具里注册一行启动命令即可接入(见 [接入其他 AI 工具](#接入其他-ai-工具));完整安装方式(全局 npm 包、Claude Code 插件)见 [安装](#安装)。
+在任意支持 MCP 的 AI 工具里注册一行启动命令即可接入(见 [接入其他 AI 工具](#接入其他-ai-工具));完整安装方式(全局 npm 包、Claude Code 插件)见 [安装](#安装)。
 
 ## 安装
 
 需要 **Node.js >= 20**(基于 Node 内置 `fetch` 与 `node:test`)。
 
 ```bash
-# 本项目是本地仓库,已在本地;进入项目目录后安装依赖
 npm install
 ```
 
@@ -84,12 +81,12 @@ npm install
 
 | 工具 | 说明 |
 |---|---|
-| `describe_image(path, focus?)` | 描述本地图片(主体、颜色、布局、对象关系、图中文字) |
-| `ocr_image(path)` | 提取图片中的文字,保留排版顺序(验证码、报错截图、文档截图) |
-| `screen_capture(target, focus?, clientArea?)` | 截取指定程序窗口并描述。`target` 必填(窗口 ID/进程名/标题);`clientArea`(仅 Windows)为 true 时截客户区(去边框标题栏) |
+| `describe_image(path, focus?, prompt?)` | 描述本地图片(主体、颜色、布局、对象关系、图中文字) |
+| `ocr_image(path, prompt?)` | 提取图片中的文字,保留排版顺序(验证码、报错截图、文档截图) |
+| `screen_capture(target, focus?, clientArea?, prompt?)` | 截取指定程序窗口并描述。`target` 必填(窗口 ID/进程名/标题);`clientArea`(仅 Windows)为 true 时截客户区(去边框标题栏) |
 | `list_windows()` | 列出当前打开的窗口(含最小化窗口,标注"已最小化";窗口 ID + 标题 + 进程名 + PID),供选择 `screen_capture` 的 target |
 
-全部返回**纯文字**。截指定窗口前先 `list_windows()` 拿窗口清单(窗口 ID/进程名/PID),再 `screen_capture(target='窗口 ID、进程名或标题')`。找不到匹配窗口/截图失败会**明确报错**并提示原因,不会回退全屏。`screen_capture` 成功(截图+描述均成功)时返回描述文本,并附 `[截图已保存到 <路径> …]`(落盘位置,仅保留最近 20 张);窗口存在降级/提示原因(如最小化窗口临时恢复)时额外附 `[提示] …`。截图成功但描述失败时返回错误文案,已保存的路径见日志 `screen_capture_degrade` 行。
+全部返回**纯文字**。`prompt` 可选:传它时**原样**作为发给视觉模型的提问(覆盖 `focus` 与默认句式);不传则用默认描述/OCR 提示词(`describe_image` / `ocr_image`)或 `focus` /「指定的窗口:{target}」(`screen_capture`)。截指定窗口前先 `list_windows()` 拿窗口清单(窗口 ID/进程名/PID),再 `screen_capture(target='窗口 ID、进程名或标题')`。找不到匹配窗口/截图失败会**明确报错**并提示原因,不会回退全屏。`screen_capture` 成功(截图+描述均成功)时返回描述文本,并附 `[截图已保存到 <路径> …]`(落盘位置,仅保留最近 20 张);窗口存在降级/提示原因(如最小化窗口临时恢复)时额外附 `[提示] …`。截图成功但描述失败时返回错误文案,已保存的路径见日志 `vision_failed` 行(来源含 `截屏 <路径>`)。
 
 ## 配置
 
@@ -107,9 +104,9 @@ npm install
 | `VISION_MAX_TOKENS` | 场景默认 | 单次输出 token 上限:不设则描述 2048 / OCR 4096;设 `0` 表示不发送该字段(部分代理不接受会报错);正数指定上限 |
 | `VISION_MAX_RETRIES` | `1` | 失败重试次数,0 不重试,上限 5 |
 | `VISION_CACHE_SIZE` | `0` | 成功结果内存缓存条数上限(0=关闭)。同图+同提示词重复调用时命中缓存,省一次视觉调用;仅存本进程内存、不落盘,重启即清。多端点 fallback 下命中返回先前成功结果(可能来自备用端点),不触发实时探测,需实时切换时关闭缓存 |
-| `VISION_LOG_FILE` | 本仓库根 `.text-vision/log.txt` | 诊断日志文件路径(失败/成功/截屏提示都会追加写入;仓库装在只读位置时设此变量指向可写目录) |
+| `VISION_LOG_FILE` | 本仓库根 `.text-vision/log.txt`(仓库只读时回退 `~/.text-vision/log.txt`) | 诊断日志文件路径(失败/成功/截屏提示都会追加写入;仓库只读自动回退,也可手动设此变量指向可写目录) |
 | `VISION_LOG_SUCCESS` | `1` | 是否写成功日志,设 `0`/`false` 关闭(失败日志始终写)。判定宽松:除 `0`/`false` 外任意值都视为开启 |
-| `VISION_SHOTS_DIR` | 本仓库根 `.text-vision/screenshots` | 截屏落盘目录(最近 20 张自动清理,勿与其它用途共享) |
+| `VISION_SHOTS_DIR` | 本仓库根 `.text-vision/screenshots`(仓库只读时回退 `~/.text-vision/screenshots`) | 截屏落盘目录(最近 20 张自动清理,勿与其它用途共享) |
 
 <details>
 <summary><b>进阶(特定场景才需要)</b></summary>
@@ -127,7 +124,7 @@ npm install
 
 ### 日志与排障
 
-视觉调用**失败**(`vision_failed`)、**成功**(`vision_ok`,可用 `VISION_LOG_SUCCESS=0` 关闭)、**缓存命中**(`vision_cache`,开启 `VISION_CACHE_SIZE` 时)与截屏提示/降级(`screen_capture_degrade`,含降级原因与成功截图的信息提示)都追加写入日志文件(默认本仓库根 `.text-vision/log.txt`,可用 `VISION_LOG_FILE` 改路径)。失败行含调用来源与脱敏后的错误原因,发起过 HTTP 请求的还记耗时/HTTP 状态/模型;成功行只记来源标签、不含路径。内部兜底的未预期异常记 `tool_error`。
+视觉调用**失败**(`vision_failed`)、**成功**(`vision_ok`,可用 `VISION_LOG_SUCCESS=0` 关闭)、**缓存命中**(`vision_cache`,开启 `VISION_CACHE_SIZE` 时)与截屏提示/降级(`screen_capture_degrade`,含降级原因与成功截图的信息提示)都追加写入日志文件(默认本仓库根 `.text-vision/log.txt`、仓库只读时回退用户主目录 `~/.text-vision/log.txt`,可用 `VISION_LOG_FILE` 改路径)。失败行含调用来源与脱敏后的错误原因,发起过 HTTP 请求的还记耗时/HTTP 状态/模型;成功行只记来源标签、不含路径。内部兜底的未预期异常记 `tool_error`。仓库只读回退用户目录时,日志首行会补一条 `storage_fallback` 说明实际落盘位置。
 
 **视觉模型报错但返回文本不足时,先查这个日志文件**——记录原始路径但仅存于本机(已 gitignore)。
 
@@ -180,7 +177,7 @@ Claude Code、OpenCode、Cursor、Windsurf、Gemini CLI、Codex 等的**具体�
 | 技能层 | `.claude/skills/text-vision/SKILL.md` | 支持技能的工具 | 触发词命中时自动加载并调用 |
 | Hook 层 | `hooks/read-image-hook.js` + `hooks/paste-image-hook.js` | 仅 Claude Code | `PreToolUse` 拦截 `Read` 读图自动注入描述;**`UserPromptSubmit` 拦截用户粘贴/拖入的图片**也自动注入 |
 
-> **粘贴/拖入图片**:除规则模板引导外,还可启用 `paste-image-hook`(`UserPromptSubmit` 事件)自动拦截——用户消息里带图片时,直接用视觉模型转成文字注入对话,模型第一时间"看见",不必等它自觉调工具。两条 hook 覆盖两个场景:Read 读图(模型主动读文件)+ 粘贴图(用户直接贴)。
+> **粘贴/拖入图片**:规则模板会引导模型"别索要路径、自行定位落盘文件再调 `describe_image`";在此基础上还可启用 `paste-image-hook`(`UserPromptSubmit` 事件)自动拦截——用户消息里带图片时,直接用视觉模型转成文字注入对话,模型第一时间"看见",不必等它自觉调工具。两条 hook 覆盖两个场景:Read 读图(模型主动读文件)+ 粘贴图(用户直接贴)。
 >
 > **截图类工具给 AI 用**:`screen_capture` / `list_windows` 主要给执行任务的 AI 主动调用做视觉识别(看界面/程序状态);普通用户直接贴图走 `describe_image` / `ocr_image` 即可。
 >

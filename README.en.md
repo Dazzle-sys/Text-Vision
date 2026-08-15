@@ -25,7 +25,7 @@ English | [简体中文](README.md)
 >
 > 1. **Don't use it on sensitive content**: do not read or capture screens containing passwords, accounts, chat logs, IDs, or bank cards.
 > 2. **`screen_capture` captures only the window you target**: pass `target` (window ID / process name / title) to pick the program to capture — no full-screen capture (see [Cross-Platform Screenshot Notes](#cross-platform-screenshot-notes)).
-> 3. **Screenshots stay on your machine**: saved under this repo's `.text-vision/screenshots/` (last 20 kept, auto-pruned, gitignored). Other users on the machine may be able to read this directory — delete sensitive captures manually.
+> 3. **Screenshots stay on your machine**: saved under this repo's `.text-vision/screenshots/` (last 20 kept, auto-pruned, gitignored); falls back to `~/.text-vision/` when the repo is installed read-only (logs too). Other users on the machine may be able to read this directory — delete sensitive captures manually.
 > 4. **Returned text may contain local info**: `screen_capture` returns the screenshot path, and `list_windows` returns window titles verbatim (may contain local paths). If your text model is a remote API, these are sent to the provider.
 
 ## Table of Contents
@@ -44,29 +44,25 @@ English | [简体中文](README.md)
 
 ## Quick Start
 
-Requires **Node.js >= 20** (built on Node's built-in `fetch` and `node:test`). Three steps to get running:
+Requires **Node.js >= 20** (built on Node's built-in `fetch` and `node:test`). Two steps to get running:
 
 ```bash
-# 1. Install dependencies (this project is a local repository)
+# 1. Install dependencies
 npm install
 
 # 2. Configure the vision engine (three required env vars; or inject via your tool's MCP config `env`, see Configuration)
 export VISION_API_BASE="https://dashscope.aliyuncs.com/compatible-mode/v1"
 export VISION_API_KEY="sk-your-key"
 export VISION_MODEL="qwen-vl-max"   # must be all-lowercase
-
-# 3. Start the MCP server
-node src/index.js
 ```
 
-Once running, register the startup command in any MCP-capable AI tool (see [Integration with Other AI Tools](#integration-with-other-ai-tools)); full installation options (global npm package, Claude Code plugin) are in [Installation](#installation).
+Then register the startup command in any MCP-capable AI tool (see [Integration with Other AI Tools](#integration-with-other-ai-tools)); full installation options (global npm package, Claude Code plugin) are in [Installation](#installation).
 
 ## Installation
 
 Requires **Node.js >= 20** (built on Node's built-in `fetch` and `node:test`).
 
 ```bash
-# This project is a local repository; install dependencies inside the project directory
 npm install
 ```
 
@@ -78,18 +74,18 @@ npm install
 > claude plugin install <absolute repo path>
 > ```
 >
-> You still configure the vision engine: set `VISION_API_BASE` / `VISION_API_KEY` / `VISION_MODEL` (global env vars or the plugin MCP config env). The plugin MCP server starts via `node src/index.js` and picks up those `VISION_*` vars.
+> You still configure the vision engine: set `VISION_API_BASE` / `VISION_API_KEY` / `VISION_MODEL` (global env vars or the plugin MCP config env). The plugin MCP server starts via `node src/index.js` and picks up those `VISION_*` vars. The plugin package can also be distributed as a marketplace item (see `.claude-plugin/plugin.json` and [docs/auto-invoke.en.md](docs/auto-invoke.en.md)).
 
 ## Provided Tools
 
 | Tool | Description |
 |---|---|
-| `describe_image(path, focus?)` | Describe a local image (subject, colors, layout, object relations, text) |
-| `ocr_image(path)` | Extract text from an image, preserving layout (captchas, error screenshots, document screenshots) |
-| `screen_capture(target, focus?, clientArea?)` | Capture a specific program window and describe it. `target` is required (window ID / process name / title); `clientArea` (Windows only) captures the client area, stripping the frame and title bar |
+| `describe_image(path, focus?, prompt?)` | Describe a local image (subject, colors, layout, object relations, text) |
+| `ocr_image(path, prompt?)` | Extract text from an image, preserving layout (captchas, error screenshots, document screenshots) |
+| `screen_capture(target, focus?, clientArea?, prompt?)` | Capture a specific program window and describe it. `target` is required (window ID / process name / title); `clientArea` (Windows only) captures the client area, stripping the frame and title bar |
 | `list_windows()` | List currently open windows (includes minimized ones, marked "minimized"; window ID + title + process + PID), for choosing `screen_capture`'s `target` |
 
-All return **plain text**, directly usable by text models. To capture a specific window, call `list_windows()` first, then `screen_capture(target='window ID, process name or title')`. No match, enumeration failure, or capture failure **errors out explicitly** with the reason — no more full-screen fallback. On success (capture + description), `screen_capture` returns the description plus `[截图已保存到 <path> …]` (the save location; only the last 20 are kept). When the capture carries a degradation/info note (e.g. a minimized window was temporarily restored), it additionally appends `[提示] …`. If the description fails after a successful capture, the returned text is the error message — the shot is still saved, and its path is in the `screen_capture_degrade` log line.
+All return **plain text**, directly usable by text models. `prompt` is optional: when passed, it is sent **verbatim** as the question to the vision model (overriding `focus` and the default wording); when omitted, the default describe/OCR prompt (`describe_image` / `ocr_image`) or `focus` / `指定的窗口:{target}` ("specified window: {target}", the literal default wording) (`screen_capture`) is used. To capture a specific window, call `list_windows()` first, then `screen_capture(target='window ID, process name or title')`. No match, enumeration failure, or capture failure **errors out explicitly** with the reason — there is no full-screen fallback. On success (capture + description), `screen_capture` returns the description plus `[截图已保存到 <path> …]` (the save location; only the last 20 are kept). When the capture carries a degradation/info note (e.g. a minimized window was temporarily restored), it additionally appends `[提示] …`. If the description fails after a successful capture, the returned text is the error message — the shot is still saved, and its path appears in the `vision_failed` log line (the call source reads `截屏 <path>`). Note: bracketed strings such as `[截图已保存到 <path> …]` and `[提示] …` are the tool's Chinese runtime output.
 
 ## Configuration
 
@@ -107,9 +103,9 @@ Everything is configured via environment variables (the `VISION_*` prefix); **no
 | `VISION_MAX_TOKENS` | scenario default | Per-request output token cap: unset → describe 2048 / OCR 4096; `0` → omit the field (some proxies reject it); positive → explicit cap |
 | `VISION_MAX_RETRIES` | `1` | Failed-request retries, `0` disables, cap 5 |
 | `VISION_CACHE_SIZE` | `0` | Successful-result memory cache cap (0 = off). Same image + same prompt hits the cache and skips a vision call; process-memory only, never persisted, cleared on restart. With multi-endpoint fallback, a cache hit returns the earlier successful result (possibly from a backup endpoint) without re-probing health — disable the cache when you need live failover |
-| `VISION_LOG_FILE` | `.text-vision/log.txt` under this repo's root | Diagnostic log file path (failures/successes/capture notes are appended; set a writable path when the repo is installed in a read-only location) |
+| `VISION_LOG_FILE` | `.text-vision/log.txt` under this repo's root (falls back to `~/.text-vision/log.txt` when the repo is read-only) | Diagnostic log file path (failures/successes/capture notes are appended; set a writable path when the repo is installed in a read-only location) |
 | `VISION_LOG_SUCCESS` | `1` | Whether successful calls are logged; set `0`/`false` to disable (failures are always logged). Check is lenient: any value other than `0`/`false` enables it |
-| `VISION_SHOTS_DIR` | `.text-vision/screenshots` under this repo's root | Screenshot directory (last 20 auto-pruned; don't share with other uses) |
+| `VISION_SHOTS_DIR` | `.text-vision/screenshots` under this repo's root (falls back to `~/.text-vision/screenshots` when the repo is read-only) | Screenshot directory (last 20 auto-pruned; don't share with other uses) |
 
 <details>
 <summary><b>Advanced (specific scenarios only)</b></summary>
@@ -127,7 +123,7 @@ Everything is configured via environment variables (the `VISION_*` prefix); **no
 
 ### Logging & Troubleshooting
 
-Vision-call **failures** (`vision_failed`), **successes** (`vision_ok`, disable with `VISION_LOG_SUCCESS=0`), **cache hits** (`vision_cache`, when `VISION_CACHE_SIZE` is on) and capture notes/fallbacks (`screen_capture_degrade`, covering fallback reasons and info hints on successful captures) are appended to the log file (default: this repo's `.text-vision/log.txt`, overridable via `VISION_LOG_FILE`). Failure lines include the call source and the sanitized error reason; those that made an HTTP request also record latency/HTTP status/model; success lines carry only the source label, no path. Unexpected internal exceptions are recorded as `tool_error`.
+Vision-call **failures** (`vision_failed`), **successes** (`vision_ok`, disable with `VISION_LOG_SUCCESS=0`), **cache hits** (`vision_cache`, when `VISION_CACHE_SIZE` is on) and capture notes/fallbacks (`screen_capture_degrade`, covering fallback reasons and info hints on successful captures) are appended to the log file (default: this repo's `.text-vision/log.txt` — `~/.text-vision/log.txt` when the repo is read-only — overridable via `VISION_LOG_FILE`). Failure lines include the call source and the sanitized error reason; those that made an HTTP request also record latency/HTTP status/model; success lines carry only the source label, no path. Unexpected internal exceptions are recorded as `tool_error`. When the repo is read-only and storage falls back to the home directory, the first log line is a `storage_fallback` note stating the actual location.
 
 **When the vision model errors and the returned text isn't enough, check this log file first** — it records raw paths locally only (gitignored).
 
@@ -180,7 +176,7 @@ Let the model **call vision on its own** during a task, instead of you feeding d
 | Skill layer | `.claude/skills/text-vision/SKILL.md` | skill-capable tools | Auto-loads and calls on trigger words |
 | Hook layer | `hooks/read-image-hook.js` + `hooks/paste-image-hook.js` | Claude Code only | `PreToolUse` intercepts `Read` on images and injects a text description; **`UserPromptSubmit` intercepts pasted/dropped images** and injects a description too |
 
-> **Pasted / dropped images**: besides the rule templates (guiding the model to "not ask for the path, locate the saved file itself, then call `describe_image`"), you can enable `paste-image-hook` (`UserPromptSubmit`) so pasted images are auto-converted to text the moment they arrive. The two hooks cover both directions: `Read` on images (model reading a file) + pasted images (user pasting directly).
+> **Pasted / dropped images**: besides the rule templates (guiding the model to "not ask for the path, locate the saved file itself, then call `describe_image`"), you can enable `paste-image-hook` (`UserPromptSubmit`) so pasted images are auto-converted to text the moment they arrive — the model "sees" them right away, without calling a tool on its own. The two hooks cover both directions: `Read` on images (model reading a file) + pasted images (user pasting directly).
 >
 > **Capture tools are for the AI**: `screen_capture` / `list_windows` are mainly for an executing AI to call on its own for vision (watching UI / program state); end users simply paste images and use `describe_image` / `ocr_image`.
 >

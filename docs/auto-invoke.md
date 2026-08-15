@@ -1,5 +1,7 @@
 # 三层自动调用机制:让文本模型"自己去看图"
 
+[English](auto-invoke.en.md) | 简体中文
+
 MCP server 解决"**能**看图";三层机制解决"**主动**看图"——模型在任务中自己决定调用视觉工具,而非等你手动喂描述。三层逐层增强,按需启用:
 
 > **分工定位**:读图类工具(`describe_image` / `ocr_image`)承接用户**贴图**与本地图片;截图类工具(`screen_capture` / `list_windows`)是给**执行任务的 AI 主动调用做视觉识别**的——模型需要看运行中程序的界面/状态时自己截,不靠用户手动截图。这份"主动截图"引导已内置进模板规则(见 [templates/](../templates/) 的【主动截图看界面】段)。
@@ -80,7 +82,7 @@ MCP 注册好≠ hook 生效。hook 要在 Claude Code 的 `settings.json` 里�
 # 读图 hook:图片 → deny + 【图片视觉描述】;把 file_path 换成任意 .txt → allow
 echo '{"tool_name":"Read","cwd":"<本仓库绝对路径>","tool_input":{"file_path":"test/test.png"}}' | node hooks/read-image-hook.js
 
-# 粘贴图 hook:prompt 带图片路径 → 注入【粘贴图片视觉描述】;不带 → 空输出
+# 粘贴图 hook:prompt 带图片路径 → 注入【粘贴图片视觉描述】;不带 → 无注入(仅返回空壳 JSON)
 echo '{"prompt":"分析这张图 [Image 1] test/test.png","cwd":"<本仓库绝对路径>"}' | node hooks/paste-image-hook.js
 ```
 

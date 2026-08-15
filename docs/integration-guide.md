@@ -1,5 +1,7 @@
 # MCP 接入指南:把 text-vision 接进你的 AI 工具
 
+[English](integration-guide.en.md) | 简体中文
+
 本项目核心只有一个 MCP server(`src/index.js`),接入 = 在支持 MCP 的工具里**注册一行启动命令**,核心代码零改动。
 
 > 各工具的 MCP 配置格式会随版本演进。本文示例基于当前主流版本,若与你的版本不一致,**以对应工具的官方文档为准**——格式大同小异,重点是 `command` + `args` 这对字段。

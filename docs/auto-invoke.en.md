@@ -69,13 +69,20 @@ Registering the MCP server does not activate the hook; declare it separately in 
 - **Fail open**: missing config, failed requests, timeouts, etc. **never block work** — the hook logs and lets the original `Read` proceed. In such a failure the text model still receives the raw bytes; that's what the rule layer is for.
 - **Timeout**: 30 seconds by default in the hook scenario (overridable via `VISION_TIMEOUT`). `VISION_MAX_RETRIES` amplifies the total time — see the README's "Configuration" section.
 
+#### Paste-hook-specific behavior (`paste-image-hook.js`)
+
+- **Never blocks**: `UserPromptSubmit` is an additive-content event; it injects a description without modifying the user message and always exits 0.
+- **Image sources**: prefers the host's structured `images` array; otherwise extracts `[Image N] path` and markdown `![alt](path)` from the message text (no bare-path guessing, to avoid matching code strings).
+- **Quantity cap**: at most **4** images are auto-described per submission; anything beyond that is left to the rule layer.
+- **Fail silent**: any image that fails recognition, exceeds the cap, or doesn't exist is skipped without affecting the other images or the message itself.
+
 ### 1.3 Verifying the Hook Manually
 
 ```bash
 # Read hook: image → deny + 【图片视觉描述】; replace file_path with any .txt → allow
 echo '{"tool_name":"Read","cwd":"<absolute repo path>","tool_input":{"file_path":"test/test.png"}}' | node hooks/read-image-hook.js
 
-# Paste hook: prompt with an image path → injects 【粘贴图片视觉描述】; without one → empty output
+# Paste hook: prompt with an image path → injects 【粘贴图片视觉描述】; without one → no injection (a bare JSON shell only)
 echo '{"prompt":"分析这张图 [Image 1] test/test.png","cwd":"<absolute repo path>"}' | node hooks/paste-image-hook.js
 ```
 

@@ -1,9 +1,32 @@
+<div align="center">
+
 # Text-Vision:为无视觉文本模型提供视觉能力
 
 [English](README.en.md) | 简体中文
 
-**纯文本模型**(如 Claude Code 经代理映射、OpenCode 直连)看不懂图片。本项目提供一个 MCP server,把**图片/截图/屏幕**发给任意 **OpenAI 兼容视觉模型**(千问 qwen-vl、GLM-4V、gpt-4o 等),转成**文字描述**喂给文本模型——相当于给文本模型配了一双"眼睛"。
+![Node.js ≥ 20](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=nodedotjs&logoColor=white) ![License: MIT](https://img.shields.io/github/license/Dazzle-sys/Text-Vision) ![npm](https://img.shields.io/npm/v/text-vision) ![Windows · macOS · Linux](https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-blue)
 
+**给纯文本模型配一双"眼睛"** —— 把**图片 / 截图 / 屏幕**交给任意 **OpenAI 兼容视觉模型**(qwen-vl、GLM-4V、gpt-4o 等),转成**文字描述**喂回文本模型。
+
+</div>
+
+**纯文本模型**(如 Claude Code 经代理映射、OpenCode 直连)看不懂图片。Text-Vision 是一个 **MCP server**,把图片/截屏/屏幕转成文字描述,给它们补上这双眼睛——模型在任务中"看见"画面,就像人看图一样:
+
+```mermaid
+flowchart LR
+    A["🖼️ 图片 / 截图 / 屏幕"] --> B["Text-Vision<br/>MCP server"]
+    B --> C["OpenAI 兼容视觉 API<br/>qwen-vl · GLM-4V · gpt-4o"]
+    C --> D["📝 文字描述"]
+    D --> E["纯文本模型<br/>Claude Code · OpenCode · Cursor"]
+```
+
+| 🖼️ 看图理解 | 🔍 文字提取 | 🪟 指定窗口截屏 |
+|---|---|---|
+| `describe_image` 描述主体、颜色、布局、图内文字 | `ocr_image` 提取文字并保留排版顺序(验证码、报错截图) | `screen_capture` 只截指定窗口,不截全屏 |
+| 🔌 跨工具接入 | 🌍 跨平台 | 🔁 稳健可靠 |
+| 一行命令接入 Claude Code / OpenCode / Cursor… | Windows / macOS / Linux 全覆盖 | 多端点自动 fallback、同图结果缓存、大图自动压缩 |
+
+> [!WARNING]
 > **隐私提醒(用之前请先看)**:读图/截屏内容会以 base64 发送到你配置的**第三方视觉 API**,离开本机。请留意:
 >
 > 1. **别对敏感画面用**:含密码/账号/聊天记录/证件/银行卡等的画面请勿读取或截图。
@@ -11,13 +34,11 @@
 > 3. **截图留在本机**:存于本仓库 `.text-vision/screenshots/`(最近 20 张,自动清最旧,已 gitignore)。该目录同机其他用户可能可读,敏感画面用过后请手动删除。
 > 4. **返回文本可能带本机信息**:`screen_capture` 返回含截图路径,`list_windows` 原样返回窗口标题(可能含本机路径)。若文本模型是远程 API,这些会随对话发给服务商。
 
-- 跨平台:Windows / macOS / Linux
-- 跨工具:支持 MCP 的 AI 编码工具均可接入(Claude Code、OpenCode、Cursor、Windsurf、Gemini CLI、Codex…)
-
 ## 目录
 
-- [提供的工具](#提供的工具)
+- [快速开始](#快速开始)
 - [安装](#安装)
+- [提供的工具](#提供的工具)
 - [配置](#配置)
 - [快速验证](#快速验证)
 - [自动化测试](#自动化测试)
@@ -26,6 +47,44 @@
 - [跨平台截屏说明](#跨平台截屏说明)
 - [已知限制](#已知限制)
 - [相关文档](#相关文档)
+
+## 快速开始
+
+需要 **Node.js ≥ 20**(基于 Node 内置 `fetch` 与 `node:test`)。三步跑起来:
+
+```bash
+# 1. 安装依赖(本项目是本地仓库,已在本地)
+npm install
+
+# 2. 配置视觉引擎(三个必填环境变量;也可写进接入工具的 MCP 配置 env,见「配置」)
+export VISION_API_BASE="https://dashscope.aliyuncs.com/compatible-mode/v1"
+export VISION_API_KEY="sk-你的Key"
+export VISION_MODEL="qwen-vl-max"   # 模型名必须全小写
+
+# 3. 启动 MCP server
+node src/index.js
+```
+
+启动后,在任意支持 MCP 的 AI 工具里注册一行启动命令即可接入(见 [接入其他 AI 工具](#接入其他-ai-工具));完整安装方式(全局 npm 包、Claude Code 插件)见 [安装](#安装)。
+
+## 安装
+
+需要 **Node.js >= 20**(基于 Node 内置 `fetch` 与 `node:test`)。
+
+```bash
+# 本项目是本地仓库,已在本地;进入项目目录后安装依赖
+npm install
+```
+
+> 项目同步发布 npm 包 `text-vision`(含运行代码、文档与模板,不含本地开发脚本),远程场景可 `npm install -g text-vision`;以上说明均基于本地仓库方式。
+>
+> **Claude Code 用户可选:插件安装(一步分发三层机制)**。仓库自带 `.claude-plugin/plugin.json`,作为 Claude Code 插件安装后,自动启用 `UserPromptSubmit`(粘贴图拦截)+ `PreToolUse`(Read 读图拦截)两条 hook 与 `skills/` 技能,无需手动注册:
+>
+> ```bash
+> claude plugin install <本仓库绝对路径>
+> ```
+>
+> 安装后仍需配置视觉引擎:设 `VISION_API_BASE` / `VISION_API_KEY` / `VISION_MODEL`(全局环境变量或 Claude Code 的 MCP 配置 env)。插件 MCP server 用 `node src/index.js` 启动,自带 `VISION_*` 环境变量即生效。插件打包文件亦可作 marketplace 分发(见 `.claude-plugin/plugin.json` 与 [docs/auto-invoke.md](docs/auto-invoke.md))。
 
 ## 提供的工具
 
@@ -38,35 +97,9 @@
 
 全部返回**纯文字**。截指定窗口前先 `list_windows()` 拿窗口清单(窗口 ID/进程名/PID),再 `screen_capture(target='窗口 ID、进程名或标题')`。找不到匹配窗口/截图失败会**明确报错**并提示原因,不会回退全屏。`screen_capture` 成功(截图+描述均成功)时返回描述文本,并附 `[截图已保存到 <路径> …]`(落盘位置,仅保留最近 20 张);窗口存在降级/提示原因(如最小化窗口临时恢复)时额外附 `[提示] …`。截图成功但描述失败时返回错误文案,已保存的路径见日志 `screen_capture_degrade` 行。
 
-## 安装
-
-需要 **Node.js >= 20**(基于 Node 内置 `fetch` 与 `node:test`)。
-
-```bash
-# 本项目是本地仓库,已在本地;进入项目目录后安装依赖
-npm install
-```
-
-> 项目同步发布 npm 包 `text-vision`(含运行代码、文档与模板,不含本地开发脚本),远程场景可 `npm install -g text-vision`;以下说明均基于本地仓库方式。
->
-> **Claude Code 用户可选:插件安装(一步分发三层机制)**。仓库自带 `.claude-plugin/plugin.json`,作为 Claude Code 插件安装后,自动启用 `UserPromptSubmit`(粘贴图拦截)+ `PreToolUse`(Read 读图拦截)两条 hook 与 `skills/` 技能,无需手动注册:
->
-> ```bash
-> claude plugin install <本仓库绝对路径>
-> ```
->
-> 安装后仍需配置视觉引擎:设 `VISION_API_BASE` / `VISION_API_KEY` / `VISION_MODEL`(全局环境变量或 Claude Code 的 MCP 配置 env)。插件 MCP server 用 `node src/index.js` 启动,自带 `VISION_*` 环境变量即生效。插件打包文件亦可作 marketplace 分发(见 `.claude-plugin/plugin.json` 与 [docs/auto-invoke.md](docs/auto-invoke.md))。
-
 ## 配置
 
-全部通过环境变量配置(`VISION_*` 前缀),**无需任何配置文件**。最简使用(终端导出,或写进接入工具的 MCP 配置 `env` 字段,见 [docs/integration-guide.md](docs/integration-guide.md) 第 6 节):
-
-```bash
-export VISION_API_BASE="https://dashscope.aliyuncs.com/compatible-mode/v1"
-export VISION_API_KEY="sk-你的Key"
-export VISION_MODEL="qwen-vl-max"   # 模型名必须全小写
-node src/index.js
-```
+全部通过环境变量配置(`VISION_*` 前缀),**无需任何配置文件**。最简三件套见 [快速开始](#快速开始);也可通过接入工具的 MCP 配置 `env` 字段注入(见 [docs/integration-guide.md](docs/integration-guide.md) 第 6 节)。
 
 ### 必填 + 常用
 
@@ -84,13 +117,16 @@ node src/index.js
 | `VISION_LOG_SUCCESS` | `1` | 是否写成功日志,设 `0`/`false` 关闭(失败日志始终写)。判定宽松:除 `0`/`false` 外任意值都视为开启 |
 | `VISION_SHOTS_DIR` | 本仓库根 `.text-vision/screenshots` | 截屏落盘目录(最近 20 张自动清理,勿与其它用途共享) |
 
-### 进阶(特定场景才需要)
+<details>
+<summary><b>进阶(特定场景才需要)</b></summary>
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
 | `DEBUG_VISION` | — | `1`/`true` 时打印调试日志到 stderr |
 | `VISION_HOOK_MODE` | — | 仅 hook 场景:`ocr` 时读图走 OCR 而非描述,详见 [三层自动调用机制](#三层自动调用机制) |
 | `VISION_POWERSHELL` | — | (仅 Windows)pwsh/powershell 可执行文件路径,显式指定优先;未指定时探测 `Program Files\PowerShell\7\pwsh.exe`,否则回退 `powershell.exe` |
+
+</details>
 
 - 失败自动重试:网络瞬时错误、`429/408/500/502/503/504` 按 `VISION_MAX_RETRIES` 重试;`401` 与**超时**不重试,只尝试一次。最坏总耗时 ≈ (maxRetries+1) × timeoutMs——hook 场景默认 30s 超时,重试多时请同时调大 `VISION_TIMEOUT`。
 - **务必用 HTTPS 端点**:`http://` 会让 API Key 与图片内容明文传输(代码打印警告但不拦截);也不要把凭据写进 `VISION_API_BASE`(如 `https://user:pass@host/v1`),会随日志/报错外泄。
@@ -164,6 +200,7 @@ Claude Code、OpenCode、Cursor、Windsurf、Gemini CLI、Codex 等的**具体�
 - **macOS**:系统内置 `screencapture`(零安装),再用 `sips` 转 **JPEG(质量 85)**(sips 不可用则退回 PNG)
 - **Linux**:ImageMagick `import -window` 截取(需安装),存 **PNG**
 
+> [!NOTE]
 > **macOS 注意**:macOS 10.15+ 首次截屏需在「系统设置 → 隐私与安全性 → 屏幕录制」授权。未授权时 `screencapture` 可能**静默输出仅壁纸的截图(退出码仍为 0)**,导致描述为空或不准确——返回异常时先检查该权限。
 
 > 大屏/多屏原始 PNG 常超 `VISION_MAX_IMAGE_MB`(默认 10MB),自动转 JPEG 可降到几 MB,对视觉描述影响可忽略。截图保存在 `.text-vision/screenshots/`(最近 20 张,已 gitignore),描述完成后不删除,可随时查看。

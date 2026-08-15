@@ -1,9 +1,32 @@
+<div align="center">
+
 # Text-Vision: Vision for Text-Only Models
 
 English | [简体中文](README.md)
 
-**Text-only models** (e.g. Claude Code via a proxy, or OpenCode direct) can't see images. This project is an MCP server that sends **images / screenshots / the screen** to any **OpenAI-compatible vision model** (Qwen qwen-vl, GLM-4V, GPT-4o, etc.) and converts them into **text descriptions** for the text model — effectively giving it a pair of "eyes".
+![Node.js ≥ 20](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=nodedotjs&logoColor=white) ![License: MIT](https://img.shields.io/github/license/Dazzle-sys/Text-Vision) ![npm](https://img.shields.io/npm/v/text-vision) ![Windows · macOS · Linux](https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-blue)
 
+**Give text-only models a pair of "eyes"** — route **images / screenshots / the screen** through any **OpenAI-compatible vision model** (qwen-vl, GLM-4V, GPT-4o, …) and feed the resulting **text descriptions** back to your text model.
+
+</div>
+
+**Text-only models** (e.g. Claude Code via a proxy, or OpenCode direct) can't see images. Text-Vision is an **MCP server** that converts images / screenshots / the screen into text descriptions — giving them that pair of eyes, so a model can "see" during a task just like a person would:
+
+```mermaid
+flowchart LR
+    A["🖼️ Image / Screenshot / Screen"] --> B["Text-Vision<br/>MCP server"]
+    B --> C["OpenAI-compatible vision API<br/>qwen-vl · GLM-4V · GPT-4o"]
+    C --> D["📝 Text description"]
+    D --> E["Text-only model<br/>Claude Code · OpenCode · Cursor"]
+```
+
+| 🖼️ Image understanding | 🔍 Text extraction | 🪟 Targeted window capture |
+|---|---|---|
+| `describe_image` describes subject, colors, layout, and text in the image | `ocr_image` extracts text while preserving layout (captchas, error screenshots) | `screen_capture` captures only the window you target — never the full screen |
+| 🔌 Works across tools | 🌍 Cross-platform | 🔁 Robust & reliable |
+| Register one command in Claude Code / OpenCode / Cursor… | Windows / macOS / Linux | Multi-endpoint failover, same-image caching, auto-compression |
+
+> [!WARNING]
 > **Privacy reminder (read before using)**: image/screenshot content is sent as base64 to your configured **third-party vision API** and leaves your machine. Keep in mind:
 >
 > 1. **Don't use it on sensitive content**: do not read or capture screens containing passwords, accounts, chat logs, IDs, or bank cards.
@@ -11,13 +34,11 @@ English | [简体中文](README.md)
 > 3. **Screenshots stay on your machine**: saved under this repo's `.text-vision/screenshots/` (last 20 kept, auto-pruned, gitignored). Other users on the machine may be able to read this directory — delete sensitive captures manually.
 > 4. **Returned text may contain local info**: `screen_capture` returns the screenshot path, and `list_windows` returns window titles verbatim (may contain local paths). If your text model is a remote API, these are sent to the provider.
 
-- Cross-platform: Windows / macOS / Linux
-- Cross-tool: works with any MCP-capable AI coding tool (Claude Code, OpenCode, Cursor, Windsurf, Gemini CLI, Codex…)
-
 ## Table of Contents
 
-- [Provided Tools](#provided-tools)
+- [Quick Start](#quick-start)
 - [Installation](#installation)
+- [Provided Tools](#provided-tools)
 - [Configuration](#configuration)
 - [Quick Verification](#quick-verification)
 - [Automated Tests](#automated-tests)
@@ -27,16 +48,24 @@ English | [简体中文](README.md)
 - [Known Limitations](#known-limitations)
 - [Related Docs](#related-docs)
 
-## Provided Tools
+## Quick Start
 
-| Tool | Description |
-|---|---|
-| `describe_image(path, focus?)` | Describe a local image (subject, colors, layout, object relations, text) |
-| `ocr_image(path)` | Extract text from an image, preserving layout (captchas, error screenshots, document screenshots) |
-| `screen_capture(target, focus?, clientArea?)` | Capture a specific program window and describe it. `target` is required (window ID / process name / title); `clientArea` (Windows only) captures the client area, stripping the frame and title bar |
-| `list_windows()` | List currently open windows (includes minimized ones, marked "minimized"; window ID + title + process + PID), for choosing `screen_capture`'s `target` |
+Requires **Node.js >= 20** (built on Node's built-in `fetch` and `node:test`). Three steps to get running:
 
-All return **plain text**, directly usable by text models. To capture a specific window, call `list_windows()` first, then `screen_capture(target='window ID, process name or title')`. No match, enumeration failure, or capture failure **errors out explicitly** with the reason — no more full-screen fallback. On success (capture + description), `screen_capture` returns the description plus `[截图已保存到 <path> …]` (the save location; only the last 20 are kept). When the capture carries a degradation/info note (e.g. a minimized window was temporarily restored), it additionally appends `[提示] …`. If the description fails after a successful capture, the returned text is the error message — the shot is still saved, and its path is in the `screen_capture_degrade` log line.
+```bash
+# 1. Install dependencies (this project is a local repository)
+npm install
+
+# 2. Configure the vision engine (three required env vars; or inject via your tool's MCP config `env`, see Configuration)
+export VISION_API_BASE="https://dashscope.aliyuncs.com/compatible-mode/v1"
+export VISION_API_KEY="sk-your-key"
+export VISION_MODEL="qwen-vl-max"   # must be all-lowercase
+
+# 3. Start the MCP server
+node src/index.js
+```
+
+Once running, register the startup command in any MCP-capable AI tool (see [Integration with Other AI Tools](#integration-with-other-ai-tools)); full installation options (global npm package, Claude Code plugin) are in [Installation](#installation).
 
 ## Installation
 
@@ -57,16 +86,20 @@ npm install
 >
 > You still configure the vision engine: set `VISION_API_BASE` / `VISION_API_KEY` / `VISION_MODEL` (global env vars or the plugin MCP config env). The plugin MCP server starts via `node src/index.js` and picks up those `VISION_*` vars.
 
+## Provided Tools
+
+| Tool | Description |
+|---|---|
+| `describe_image(path, focus?)` | Describe a local image (subject, colors, layout, object relations, text) |
+| `ocr_image(path)` | Extract text from an image, preserving layout (captchas, error screenshots, document screenshots) |
+| `screen_capture(target, focus?, clientArea?)` | Capture a specific program window and describe it. `target` is required (window ID / process name / title); `clientArea` (Windows only) captures the client area, stripping the frame and title bar |
+| `list_windows()` | List currently open windows (includes minimized ones, marked "minimized"; window ID + title + process + PID), for choosing `screen_capture`'s `target` |
+
+All return **plain text**, directly usable by text models. To capture a specific window, call `list_windows()` first, then `screen_capture(target='window ID, process name or title')`. No match, enumeration failure, or capture failure **errors out explicitly** with the reason — no more full-screen fallback. On success (capture + description), `screen_capture` returns the description plus `[截图已保存到 <path> …]` (the save location; only the last 20 are kept). When the capture carries a degradation/info note (e.g. a minimized window was temporarily restored), it additionally appends `[提示] …`. If the description fails after a successful capture, the returned text is the error message — the shot is still saved, and its path is in the `screen_capture_degrade` log line.
+
 ## Configuration
 
-Everything is configured via environment variables (the `VISION_*` prefix); **no config file is needed**. Minimal usage (export in the terminal, or inject via the `env` field of your tool's MCP config — see [docs/integration-guide.en.md](docs/integration-guide.en.md) section 6):
-
-```bash
-export VISION_API_BASE="https://dashscope.aliyuncs.com/compatible-mode/v1"
-export VISION_API_KEY="sk-your-key"
-export VISION_MODEL="qwen-vl-max"   # must be all-lowercase
-node src/index.js
-```
+Everything is configured via environment variables (the `VISION_*` prefix); **no config file is needed**. The minimal three-variable setup is in [Quick Start](#quick-start); alternatively inject them via the `env` field of your tool's MCP config (see [docs/integration-guide.en.md](docs/integration-guide.en.md) section 6).
 
 ### Required + common
 
@@ -84,13 +117,16 @@ node src/index.js
 | `VISION_LOG_SUCCESS` | `1` | Whether successful calls are logged; set `0`/`false` to disable (failures are always logged). Check is lenient: any value other than `0`/`false` enables it |
 | `VISION_SHOTS_DIR` | `.text-vision/screenshots` under this repo's root | Screenshot directory (last 20 auto-pruned; don't share with other uses) |
 
-### Advanced (specific scenarios only)
+<details>
+<summary><b>Advanced (specific scenarios only)</b></summary>
 
 | Env var | Default | Description |
 |---|---|---|
 | `DEBUG_VISION` | — | Print debug logs to stderr when `1`/`true` |
 | `VISION_HOOK_MODE` | — | Hook-only: `ocr` makes image reads go through OCR instead of description, see [Three-Layer Auto-Invocation](#three-layer-auto-invocation) |
 | `VISION_POWERSHELL` | — | (Windows only) Path to the `pwsh`/`powershell` executable. Explicit value takes precedence; otherwise probes `Program Files\PowerShell\7\pwsh.exe` and falls back to `powershell.exe` |
+
+</details>
 
 - Automatic retry: transient network errors and `429/408/500/502/503/504` retry per `VISION_MAX_RETRIES`; `401` and **timeouts** don't retry (a single attempt). Worst-case total time ≈ (maxRetries+1) × timeoutMs — the hook scenario defaults to a 30s timeout; raise `VISION_TIMEOUT` if you need more retries.
 - **Use an HTTPS endpoint**: `http://` sends the API key and image content in plain text (the code warns but doesn't block); don't embed credentials in `VISION_API_BASE` (e.g. `https://user:pass@host/v1`) — they leak via logs/errors.
@@ -164,6 +200,7 @@ Let the model **call vision on its own** during a task, instead of you feeding d
 - **macOS**: built-in `screencapture` (zero-install), then `sips` converts to **JPEG (quality 85)** (falls back to PNG if `sips` is unavailable)
 - **Linux**: ImageMagick `import -window` (install it), saved as **PNG**
 
+> [!NOTE]
 > **macOS note**: on macOS 10.15+, grant the terminal / AI tool under "System Settings → Privacy & Security → Screen Recording". Without it, `screencapture` may **silently output a wallpaper-only shot (exit code 0)**, making the description empty or inaccurate — check this permission if capture returns something unusual.
 
 > Raw PNGs from large/multi-display captures often exceed `VISION_MAX_IMAGE_MB` (default 10MB); auto-converting to JPEG brings them down to a few MB with negligible impact. Screenshots are kept in `.text-vision/screenshots/` (last 20, gitignored), not deleted after description, so you can open them anytime.

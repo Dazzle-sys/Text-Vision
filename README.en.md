@@ -12,13 +12,7 @@ English | [简体中文](README.md)
 
 **Text-only models** (e.g. Claude Code via a proxy, or OpenCode direct) can't see images. Text-Vision is an **MCP server** that converts images / screenshots / the screen into text descriptions — giving them that pair of eyes, so a model can "see" during a task just like a person would:
 
-```mermaid
-flowchart LR
-    A["🖼️ Image / Screenshot / Screen"] --> B["Text-Vision<br/>MCP server"]
-    B --> C["OpenAI-compatible vision API<br/>qwen-vl · GLM-4V · GPT-4o"]
-    C --> D["📝 Text description"]
-    D --> E["Text-only model<br/>Claude Code · OpenCode · Cursor"]
-```
+![Architecture](docs/architecture.en.svg)
 
 | 🖼️ Image understanding | 🔍 Text extraction | 🪟 Targeted window capture |
 |---|---|---|

@@ -12,13 +12,7 @@
 
 **纯文本模型**(如 Claude Code 经代理映射、OpenCode 直连)看不懂图片。Text-Vision 是一个 **MCP server**,把图片/截屏/屏幕转成文字描述,给它们补上这双眼睛——模型在任务中"看见"画面,就像人看图一样:
 
-```mermaid
-flowchart LR
-    A["🖼️ 图片 / 截图 / 屏幕"] --> B["Text-Vision<br/>MCP server"]
-    B --> C["OpenAI 兼容视觉 API<br/>qwen-vl · GLM-4V · gpt-4o"]
-    C --> D["📝 文字描述"]
-    D --> E["纯文本模型<br/>Claude Code · OpenCode · Cursor"]
-```
+![架构图](docs/architecture.svg)
 
 | 🖼️ 看图理解 | 🔍 文字提取 | 🪟 指定窗口截屏 |
 |---|---|---|

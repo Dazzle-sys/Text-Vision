@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 170" width="100%" role="img" aria-label="Text-Vision architecture: image/screenshot/screen → MCP server → vision API → text description → text-only model">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#9a9ab5"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="60" width="200" height="54" rx="6" fill="#ececff" stroke="#b3b3c9"/>
+  <text x="100" y="90" text-anchor="middle" font-family="Segoe UI,PingFang SC,Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="13" fill="#333">🖼️ Image / Screenshot / Screen</text>
+
+  <rect x="240" y="60" width="175" height="54" rx="6" fill="#ececff" stroke="#b3b3c9"/>
+  <text x="327" y="78" text-anchor="middle" font-family="Segoe UI,PingFang SC,Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="13" fill="#333">Text-Vision</text>
+  <text x="327" y="96" text-anchor="middle" font-family="Segoe UI,PingFang SC,Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="13" fill="#333">MCP server</text>
+
+  <rect x="455" y="60" width="260" height="54" rx="6" fill="#ececff" stroke="#b3b3c9"/>
+  <text x="585" y="78" text-anchor="middle" font-family="Segoe UI,PingFang SC,Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="13" fill="#333">OpenAI-compatible vision API</text>
+  <text x="585" y="96" text-anchor="middle" font-family="Segoe UI,PingFang SC,Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="13" fill="#333">qwen-vl · GLM-4V · GPT-4o</text>
+
+  <rect x="755" y="60" width="150" height="54" rx="6" fill="#ececff" stroke="#b3b3c9"/>
+  <text x="830" y="90" text-anchor="middle" font-family="Segoe UI,PingFang SC,Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="13" fill="#333">📝 Text description</text>
+
+  <rect x="945" y="60" width="215" height="54" rx="6" fill="#ececff" stroke="#b3b3c9"/>
+  <text x="1052" y="78" text-anchor="middle" font-family="Segoe UI,PingFang SC,Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="13" fill="#333">Text-only model</text>
+  <text x="1052" y="96" text-anchor="middle" font-family="Segoe UI,PingFang SC,Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="13" fill="#333">Claude Code · OpenCode · Cursor</text>
+
+  <line x1="200" y1="87" x2="236" y2="87" stroke="#9a9ab5" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="415" y1="87" x2="451" y2="87" stroke="#9a9ab5" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="715" y1="87" x2="751" y2="87" stroke="#9a9ab5" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="905" y1="87" x2="941" y2="87" stroke="#9a9ab5" stroke-width="1.5" marker-end="url(#arrow)"/>
+</svg>

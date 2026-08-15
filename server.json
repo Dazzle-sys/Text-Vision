@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.dazzle-sys/text-vision",
+  "title": "Text Vision",
+  "description": "给无视觉文本模型提供视觉能力的 MCP server:读图/OCR/截屏转文字描述,OpenAI 兼容任意视觉模型",
+  "version": "0.3.0",
+  "repository": {
+    "url": "https://github.com/Dazzle-sys/Text-Vision",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "text-vision",
+      "version": "0.3.0",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        { "name": "VISION_API_BASE", "description": "OpenAI 兼容视觉端点(可逗号分隔多个,按序 fallback)", "isRequired": true, "format": "url", "isSecret": false },
+        { "name": "VISION_API_KEY", "description": "视觉模型 API Key", "isRequired": true, "format": "string", "isSecret": true },
+        { "name": "VISION_MODEL", "description": "视觉模型名,如 qwen-vl-max / glm-4v-plus / gpt-4o(全小写)", "isRequired": true, "format": "string", "isSecret": false }
+      ]
+    }
+  ]
+}

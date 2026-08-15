@@ -57,10 +57,14 @@ export function createServer(deps = {}) {
     };
   }
 
+  // 四个工具都是"读"类:不修改文件/窗口/系统状态,全部标 readOnlyHint,供客户端(如权限 UI、ChatGPT 插件审核)识别。
+  // title 是 tools/list 里的短名,description 是详细说明;readOnlyHint 为 true 表示调用无副作用。
   server.registerTool(
     'describe_image',
     {
+      title: '描述本地图片',
       description: '用视觉模型描述一张本地图片(主体、颜色、布局、对象关系、图中文字等)。路径可为相对或绝对路径。用户粘贴/拖入的图片通常已被宿主工具保存为本地文件,消息里通常带路径或文件名线索:有路径直接传;只有文件名时,本工具按路径直接读取本地文件、不做文件搜索,请先用宿主工具(文件搜索/临时目录)定位该文件后传完整路径,不要向用户索要路径。图片内容会发送到第三方视觉 API 处理。',
+      annotations: { readOnlyHint: true },
       inputSchema: z.object({
         path: z.string().describe(`本地图片路径(${SUPPORTED_EXTS_TEXT})`),
         focus: z.string().optional().describe('关注的要点,如"按钮的颜色""图表坐标轴含义""界面元素"')
@@ -75,7 +79,9 @@ export function createServer(deps = {}) {
   server.registerTool(
     'ocr_image',
     {
+      title: '提取图片文字',
       description: '提取图片中的文字(OCR),保留排版顺序。适合验证码、报错截图、文档截图。用户粘贴/拖入的截图通常已被宿主工具保存为本地文件:有路径直接传;只有文件名时,本工具按路径直接读取本地文件、不做文件搜索,请先用宿主工具定位该文件后传完整路径。图片内容会发送到第三方视觉 API 处理。',
+      annotations: { readOnlyHint: true },
       inputSchema: z.object({
         path: z.string().describe(`本地图片路径(${SUPPORTED_EXTS_TEXT})`)
       })
@@ -90,7 +96,9 @@ export function createServer(deps = {}) {
   server.registerTool(
     'screen_capture',
     {
+      title: '截取指定窗口',
       description: '截取指定程序窗口并用视觉模型描述画面,截屏内容会发送到第三方视觉 API 处理。适合查看某个应用的界面、UI 状态。必须传 target(窗口 ID、进程名或窗口标题,模糊匹配)指定要截的窗口;可先用 list_windows 查看当前有哪些窗口可选。找不到匹配窗口/窗口截图失败会明确报错,不会回退全屏。',
+      annotations: { readOnlyHint: true },
       inputSchema: z.object({
         focus: z.string().optional().describe('关注的要点,如"当前界面布局""错误弹窗内容"'),
         target: z.string().optional().describe('必填:要截取的程序/窗口——窗口 ID、进程名或窗口标题(如 456、chrome、未命名 - 记事本),模糊匹配。被遮挡/最小化窗口也能截到本体内容(该能力仅 Windows 生效;macOS 对被遮挡窗口可能截到遮挡层、最小化到 Dock 的窗口无法枚举)。找不到匹配窗口时明确报错。'),
@@ -134,7 +142,9 @@ export function createServer(deps = {}) {
   server.registerTool(
     'list_windows',
     {
+      title: '列出窗口',
       description: '列出当前打开的窗口(含最小化窗口,标注"已最小化";最小化窗口可用 screen_capture 截取,截取时会临时恢复)(窗口 ID + 标题 + 进程名 + PID),供选择 screen_capture 的 target(可传窗口 ID 精确锁定)。纯文本模型看不到屏幕,截指定窗口前先调用本工具拿到窗口清单,再填 screen_capture(target)。',
+      annotations: { readOnlyHint: true },
       inputSchema: z.object({})
     },
     wrapTool('枚举窗口', async () => {

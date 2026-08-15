@@ -1,0 +1,18 @@
+{
+  "name": "text-vision",
+  "displayName": "Text Vision",
+  "version": "0.3.0",
+  "description": "给无视觉文本模型(DeepSeek 等)提供视觉能力的 MCP server:读图/OCR/截屏转文字描述,自带 hook 自动注入与技能",
+  "author": { "name": "Dazzle" },
+  "repository": "https://github.com/Dazzle-sys/Text-Vision",
+  "license": "MIT",
+  "keywords": ["vision", "mcp", "ocr", "screenshot", "text-model", "deepseek"],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": {
+    "text-vision": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/src/index.js"]
+    }
+  }
+}

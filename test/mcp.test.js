@@ -84,6 +84,15 @@ test('tools/list:注册了四个工具,名称与 schema 正确', async () => {
 
   const listW = tools.find(t => t.name === 'list_windows');
   assert.ok(listW, '应注册 list_windows');
+
+  // 工具注释:title 短名 + readOnlyHint(四个工具都是读类,无副作用)
+  const annotations = ['describe_image', 'ocr_image', 'screen_capture', 'list_windows']
+    .map(n => tools.find(t => t.name === n));
+  for (const t of annotations) {
+    assert.ok(t.title, `${t.name} 应有 title`);
+    assert.equal(t.annotations?.readOnlyHint, true, `${t.name} 应标注 readOnlyHint`);
+  }
+  assert.equal(tools.find(t => t.name === 'describe_image').title, '描述本地图片');
 });
 
 test('tools/call screen_capture:clientArea=true → capture 收到 clientArea(透传)', async () => {

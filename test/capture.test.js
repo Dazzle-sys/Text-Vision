@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { captureWindows, captureLinux, captureMac, captureScreen, cleanupScreenShot, defaultShotsDir, pruneShots } from '../src/capture-screen.js';
 import { resolvePsExe } from '../src/ps-exe.js';
 import { redactLocalPath } from '../src/redact.js';
-import { visionDir } from '../src/repo-root.js';
+import { setRepoProbeForTest, resetStorageRootForTest } from '../src/storage-root.js';
 
 // --- 工具:伪造 spawn 子进程 ---
 function fakeChild() {
@@ -431,13 +431,17 @@ test('captureScreen:枚举失败 → 明确报错(不再回退全屏)', withShot
 }));
 
 // ---------------------------------------------------------------------------
-// 截图目录:VISION_SHOTS_DIR 配置优先,未配置回退仓库 .text-vision/screenshots
+// 截图目录:VISION_SHOTS_DIR 配置优先,未配置回退存储根 screenshots(仓库可写时即仓库目录)
 // ---------------------------------------------------------------------------
-test('defaultShotsDir:VISION_SHOTS_DIR 配置优先(去空白),未配置/空串回退仓库目录', () => {
-  assert.equal(defaultShotsDir({ VISION_SHOTS_DIR: 'C:/shots' }), 'C:/shots');
-  assert.equal(defaultShotsDir({ VISION_SHOTS_DIR: '  C:/shots  ' }), 'C:/shots', '应去掉首尾空白');
-  assert.equal(defaultShotsDir({}), join(visionDir(), 'screenshots'));
-  assert.equal(defaultShotsDir({ VISION_SHOTS_DIR: '' }), join(visionDir(), 'screenshots'));
+test('defaultShotsDir:VISION_SHOTS_DIR 配置优先(去空白),未配置/空串回退存储根 screenshots', () => {
+  const repoBase = join(tempShotsRoot(), '.text-vision');
+  setRepoProbeForTest(repoBase);
+  try {
+    assert.equal(defaultShotsDir({ VISION_SHOTS_DIR: 'C:/shots' }), 'C:/shots');
+    assert.equal(defaultShotsDir({ VISION_SHOTS_DIR: '  C:/shots  ' }), 'C:/shots', '应去掉首尾空白');
+    assert.equal(defaultShotsDir({}), join(repoBase, 'screenshots'));
+    assert.equal(defaultShotsDir({ VISION_SHOTS_DIR: '' }), join(repoBase, 'screenshots'));
+  } finally { resetStorageRootForTest(); rmDir(repoBase); }
 });
 
 // ---------------------------------------------------------------------------

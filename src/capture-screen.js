@@ -2,7 +2,8 @@
 // 统一返回 { filePath, note? };主入口 captureScreen 再读文件转 base64,返回 { b64, filePath, sizeBytes, mime, note?, targetLabel? }。
 // 只支持指定窗口:captureScreen 必传 target(窗口 ID/进程名/标题),经 list-windows.js 枚举匹配到窗口 id 后截取,
 // 失败(未命中/枚举失败/窗口截图失败)一律明确报错,不再回退全屏。仅 Windows 支持 clientArea 截客户区(去边框标题栏)。
-// 截图落盘到 text-vision 仓库根的 .text-vision/screenshots(保留最近 MAX_SHOTS 张),方便查看,不随临时目录清理。
+// 截图落盘到存储根 screenshots(默认仓库根 .text-vision,仓库只读安装时回退用户主目录 ~/.text-vision,见 storage-root.js;
+// 保留最近 MAX_SHOTS 张),方便查看,不随临时目录清理。
 //   win32 → PowerShell + System.Drawing(零安装)
 //   darwin → screencapture(内置,零安装)
 //   linux → ImageMagick import -window(需安装)
@@ -12,7 +13,7 @@ import { join, dirname, basename } from 'node:path';
 import { promisify } from 'node:util';
 import { listWindows, matchWindow } from './list-windows.js';
 import { resolvePsExe } from './ps-exe.js';
-import { visionDir } from './repo-root.js';
+import { resolveStorageRoot } from './storage-root.js';
 import { CMD_TIMEOUT, SLOW_TIMEOUT } from './consts.js';
 
 import { redactLocalPath } from './redact.js';
@@ -21,17 +22,18 @@ const execFileP = promisify(execFile);
 // Windows 截图超时用放宽档(SLOW_TIMEOUT):PowerShell 冷启动 + 多次 Add-Type C# 编译 + 大屏 CopyFromScreen
 // + JPEG 编码在慢/高负载机器上可能超过 30s,避免误杀合法截图(killTimer 兜底仍在,卡死进程最坏等 timeout+fallbackDelay)。
 
-// 截图统一落盘到 shotsRoot(默认 text-vision 仓库根 .text-vision/screenshots,方便查看;保留最近 MAX_SHOTS 张)。
-// 不随系统临时目录清理;目录不存在则创建(仓库根通常可写,只读部署时 mkdir 抛错由上层错误路径处理)。
+// 截图统一落盘到 shotsRoot(默认存储根下 screenshots,保留最近 MAX_SHOTS 张;存储根由 resolveStorageRoot 解析:
+// 仓库可写时即仓库根 .text-vision,仓库只读安装时自动回退用户主目录 ~/.text-vision,见 storage-root.js)。
+// 不随系统临时目录清理;目录不存在则创建(目录不可写时 mkdir 抛错由上层错误路径处理)。
 const MAX_SHOTS = 20;
 
 /**
  * 默认截图目录:VISION_SHOTS_DIR 配置则用它(仓库装在只读位置时的逃生口,如全局 npm / Program Files,
- * 此时仓库内 mkdir 会 EACCES),否则 text-vision 仓库根下的 .text-vision/screenshots
- * (用模块路径定位仓库根,不随启动目录变)。
+ * 此时仓库内 mkdir 会 EACCES),否则存储根下 screenshots(仓库可写时即仓库根 .text-vision/screenshots,
+ * 只读时自动回退用户主目录 ~/.text-vision,不随启动目录变)。
  */
 export function defaultShotsDir(env = process.env) {
-  return (env.VISION_SHOTS_DIR || '').trim() || join(visionDir(), 'screenshots');
+  return (env.VISION_SHOTS_DIR || '').trim() || join(resolveStorageRoot(), 'screenshots');
 }
 
 function makeShotsDir(shotsRoot) {

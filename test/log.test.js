@@ -1,20 +1,27 @@
 // 日志模块测试:落盘追加、默认/配置路径、失败静默、debugLog 门控。全用 fake env,不依赖 process.env 全局。
+// 默认路径用例(未配 VISION_LOG_FILE)会触发 resolveStorageRoot 探测,用 setRepoProbeForTest 指到临时目录隔离,
+// 避免探针写真实仓库/真实 home;每个用例前 reset,防止探测缓存与注入跨用例泄漏。
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, mkdirSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { isDebug, debugLog, logFilePath, appendLog, isSuccessLog } from '../src/log.js';
-import { visionDir } from '../src/repo-root.js';
+import { resolveStorageRoot, setRepoProbeForTest, setHomeProbeForTest, resetStorageRootForTest } from '../src/storage-root.js';
 
 // 每个用例用独立临时目录,避免日志文件互相污染
 let dir;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'text-vision-log-test-')); });
-afterEach(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* 忽略 */ } });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'text-vision-log-test-')); resetStorageRootForTest(); });
+afterEach(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* 忽略 */ } resetStorageRootForTest(); });
 
-test('logFilePath:未配置 → text-vision 仓库根下的 .text-vision/log.txt', () => {
-  assert.equal(logFilePath({}), join(visionDir(), 'log.txt'));
-  assert.equal(logFilePath({ VISION_LOG_FILE: '' }), join(visionDir(), 'log.txt'));
+test('logFilePath:未配置 → 存储根下 log.txt(仓库可写时即仓库候选目录)', () => {
+  const repoBase = join(dir, 'repo', '.text-vision');
+  setRepoProbeForTest(repoBase);
+  try {
+    assert.equal(logFilePath({}), join(resolveStorageRoot(), 'log.txt'));
+    assert.equal(logFilePath({ VISION_LOG_FILE: '' }), join(resolveStorageRoot(), 'log.txt'));
+    assert.equal(logFilePath({}), join(repoBase, 'log.txt'), '仓库可写时默认路径即仓库候选下的 log.txt');
+  } finally { resetStorageRootForTest(); }
 });
 
 test('logFilePath:配置 VISION_LOG_FILE → 返回配置值(去空白)', () => {
@@ -84,6 +91,23 @@ test('appendLog:路径指向目录(写失败)→ 静默不抛', () => {
   const targetDir = join(dir, 'is-a-dir');
   mkdirSync(targetDir);
   assert.doesNotThrow(() => appendLog('e', 'x', { VISION_LOG_FILE: targetDir }));
+});
+
+test('appendLog:仓库只读回退 → 日志补写 [storage_fallback] 说明且只补一次', () => {
+  const blocker = join(dir, 'blocker');
+  writeFileSync(blocker, 'x'); // 普通文件占位,mkdirSync(recursive) 抛 ENOTDIR,等价仓库不可写
+  const homeBase = join(dir, 'home', '.text-vision');
+  setRepoProbeForTest(join(blocker, '.text-vision'));
+  setHomeProbeForTest(homeBase);
+  try {
+    appendLog('vision_failed', '第一次', {}); // 未配 VISION_LOG_FILE → 默认走 resolveStorageRoot(仓库只读 → 回退 home)
+    appendLog('vision_failed', '第二次', {});
+    const lines = readFileSync(join(homeBase, 'log.txt'), 'utf8').trim().split('\n');
+    const notes = lines.filter(l => l.includes('[storage_fallback]'));
+    assert.equal(notes.length, 1, '回退说明只补一次');
+    assert.match(notes[0], /仓库存储不可写.*回退用户目录/, '说明应含回退原因与用户目录');
+    assert.ok(lines[0].includes('[vision_failed]'), '首行仍是实际日志,说明行随后');
+  } finally { resetStorageRootForTest(); }
 });
 
 // debugLog 门控:patch console.error 统计调用次数,结束后恢复

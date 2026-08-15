@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { describeImageFromBase64, readLocalImage, describeImage, ocrImage } from '../src/text-vision-client.js';
+import { describeImageFromBase64, readLocalImage, describeImage, ocrImage, clearVisionCache } from '../src/text-vision-client.js';
 
 // 测试注入用配置(避免依赖真实环境变量)
 const CFG = {
@@ -489,4 +489,174 @@ test('describeImageFromBase64 传 source(带路径)+sourceLabel → 成功日志
     assert.match(content, /\[vision_ok\] 截屏 成功/, '成功日志应只含纯来源标签');
     assert.ok(!content.includes('shot-1.jpeg'), '成功日志不应包含截图文件路径');
   } finally { s.restore(); }
+});
+
+// ---------------------------------------------------------------------------
+// 多端点 fallback(apiBases):主端点不可用(网络/5xx/429/超时)→ 换下一个;确定性失败不换
+// ---------------------------------------------------------------------------
+test('多端点:主端点 503 → 重试后 fallback 到备用端点成功', async () => {
+  // CFG.maxRetries=1:主端点 503 先重试一次,仍失败才换备用端点
+  const s = stubFetch((url) => url.includes('primary.example.com') ? errRes(503, 'down') : okRes('备用端点成功'));
+  try {
+    const cfg2 = { ...CFG, apiBases: ['https://primary.example.com/v1', 'https://backup.example.com/v1'], apiBase: 'https://primary.example.com/v1' };
+    const r = await describeImageFromBase64(B64, 'image/png', null, cfg2);
+    assert.equal(r.ok, true);
+    assert.equal(r.text, '备用端点成功');
+    assert.equal(s.calls.length, 3, '主端点 503 重试一次 + 备用端点一次,共 3 次请求');
+  } finally { s.restore(); }
+});
+
+test('多端点:主端点超时(AbortError)→ fallback 到备用端点', async () => {
+  const s = stubFetch((url) => url.includes('primary.example.com')
+    ? new Promise((resolve, reject) => { const e = new Error('aborted'); e.name = 'AbortError'; reject(e); })
+    : okRes('备用成功'));
+  try {
+    const cfg2 = { ...CFG, apiBases: ['https://primary.example.com/v1', 'https://backup.example.com/v1'] };
+    const r = await describeImageFromBase64(B64, 'image/png', null, cfg2);
+    assert.equal(r.ok, true);
+    assert.equal(r.text, '备用成功');
+    assert.equal(s.calls.length, 2, '超时不重试但应 fallback');
+  } finally { s.restore(); }
+});
+
+test('多端点:主端点 401(认证错)→ 不 fallback(换端点同 key 不解决)', async () => {
+  const s = stubFetch(() => errRes(401, 'invalid key'));
+  try {
+    const cfg2 = { ...CFG, apiBases: ['https://primary.example.com/v1', 'https://backup.example.com/v1'] };
+    const r = await describeImageFromBase64(B64, 'image/png', null, cfg2);
+    assert.equal(r.ok, false);
+    assert.equal(s.calls.length, 1, '401 不应 fallback 到备用端点');
+  } finally { s.restore(); }
+});
+
+test('多端点:两个端点都失败 → 返回失败,两个端点都留失败日志', async () => {
+  const s = stubFetch((url) => errRes(500, 'boom'));
+  try {
+    const cfg2 = { ...CFG, apiBases: ['https://primary.example.com/v1', 'https://backup.example.com/v1'] };
+    const r = await describeImageFromBase64(B64, 'image/png', null, cfg2);
+    assert.equal(r.ok, false);
+    assert.match(r.text, /HTTP 500/);
+    const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
+    // 主端点 500 重试一次(2 条)+ 备用端点 500(1 条),fallback 链路每步都留痕
+    assert.match(content, /\[vision_failed\]/);
+  } finally { s.restore(); }
+});
+
+test('多端点:注入只有 apiBase(无 apiBases)→ 兼容单端点', async () => {
+  const s = stubFetch(() => okRes('单端点'));
+  try {
+    const r = await describeImageFromBase64(B64, 'image/png', null, CFG); // CFG 无 apiBases 字段
+    assert.equal(r.ok, true);
+    assert.equal(r.text, '单端点');
+    assert.equal(s.calls.length, 1);
+  } finally { s.restore(); }
+});
+
+// ---------------------------------------------------------------------------
+// 成功结果缓存(cacheSize):同图同问命中,省视觉调用
+// ---------------------------------------------------------------------------
+test('缓存:cacheSize>0 → 同图同问第二次命中,不发第二次请求', async () => {
+  let n = 0;
+  const s = stubFetch(() => { n++; return okRes('内容A'); });
+  try {
+    const cfgC = { ...CFG, cacheSize: 10 };
+    const r1 = await describeImageFromBase64(B64, 'image/png', null, cfgC);
+    assert.equal(r1.ok, true);
+    const r2 = await describeImageFromBase64(B64, 'image/png', null, cfgC);
+    assert.equal(r2.ok, true);
+    assert.equal(r2.text, '内容A');
+    assert.equal(n, 1, '第二次应命中缓存,不发请求');
+  } finally { s.restore(); clearVisionCache(); }
+});
+
+test('缓存:不同 prompt 不命中', async () => {
+  let n = 0;
+  const s = stubFetch(() => { n++; return okRes('x'); });
+  try {
+    const cfgC = { ...CFG, cacheSize: 10 };
+    await describeImageFromBase64(B64, 'image/png', '提示A', cfgC);
+    await describeImageFromBase64(B64, 'image/png', '提示B', cfgC);
+    assert.equal(n, 2, 'prompt 不同不命中');
+  } finally { s.restore(); clearVisionCache(); }
+});
+
+test('缓存:cacheSize=0(默认)→ 不缓存,重复调用各发一次', async () => {
+  let n = 0;
+  const s = stubFetch(() => { n++; return okRes('x'); });
+  try {
+    await describeImageFromBase64(B64, 'image/png', null, CFG);
+    await describeImageFromBase64(B64, 'image/png', null, CFG);
+    assert.equal(n, 2, 'cacheSize=0 不缓存');
+  } finally { s.restore(); }
+});
+
+test('缓存:命中时写 [vision_cache] 日志,且不写 [vision_ok](未实际调用)', async () => {
+  const s = stubFetch(() => okRes('ok'));
+  try {
+    const cfgC = { ...CFG, cacheSize: 10 };
+    await describeImageFromBase64(B64, 'image/png', null, cfgC);
+    await describeImageFromBase64(B64, 'image/png', null, cfgC);
+    const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
+    assert.match(content, /\[vision_cache\]/);
+    const okCount = (content.match(/\[vision_ok\]/g) || []).length;
+    assert.equal(okCount, 1, '只有第一次实际调用写 vision_ok');
+  } finally { s.restore(); clearVisionCache(); }
+});
+
+// ---------------------------------------------------------------------------
+// 大图超限自动压缩(集成):readLocalImage 超限 → 尝试压缩,成功用产物发送 / 失败回落报错
+// ---------------------------------------------------------------------------
+test('大图超限:自动压缩成功 → 用 JPEG 压缩产物发送并返回描述', async () => {
+  const big = join(logDir, 'big.png');
+  writeFileSync(big, Buffer.alloc(1_500_000)); // 1.5MB > 1MB 上限
+  const execFileFn = async (cmd, args) => { writeFileSync(args[args.length - 1], Buffer.alloc(200_000)); };
+  const cfgC = { ...CFG, maxImageMB: 1, compressDeps: { platform: 'darwin', execFileFn } };
+  const s = stubFetch((url, opts) => {
+    const body = JSON.parse(opts.body);
+    const imgUrl = body.messages[1].content[1].image_url.url;
+    assert.match(imgUrl, /^data:image\/jpeg;base64,/, '压缩产物应声明为 JPEG');
+    return okRes('压缩后内容');
+  });
+  try {
+    const r = await readLocalImage(big, 'prompt', false, cfgC);
+    assert.equal(r.ok, true);
+    assert.equal(r.text, '压缩后内容');
+  } finally { s.restore(); }
+});
+
+test('大图超限:压缩不可用(工具缺失)→ 回落到原报错,不发请求', async () => {
+  const big = join(logDir, 'big.png');
+  writeFileSync(big, Buffer.alloc(1_500_000));
+  const cfgC = { ...CFG, maxImageMB: 1, compressDeps: { platform: 'darwin', execFileFn: async () => { throw new Error('no tool'); } } };
+  const s = stubFetch(() => okRes('x'));
+  try {
+    const r = await readLocalImage(big, 'prompt', false, cfgC);
+    assert.equal(r.ok, false);
+    assert.match(r.text, /图片过大/);
+    assert.equal(s.calls.length, 0, '压缩失败不应发请求');
+  } finally { s.restore(); }
+});
+
+test('大图超限:压缩后仍超限 → 回落到原报错', async () => {
+  const big = join(logDir, 'big.png');
+  writeFileSync(big, Buffer.alloc(1_500_000));
+  const cfgC = { ...CFG, maxImageMB: 1, compressDeps: { platform: 'darwin', execFileFn: async (cmd, args) => { writeFileSync(args[args.length - 1], Buffer.alloc(2_000_000)); } } };
+  const s = stubFetch(() => okRes('x'));
+  try {
+    const r = await readLocalImage(big, 'prompt', false, cfgC);
+    assert.equal(r.ok, false);
+    assert.match(r.text, /图片过大/);
+    assert.equal(s.calls.length, 0);
+  } finally { s.restore(); }
+});
+
+test('图片为空文件(0 字节)→ 不尝试压缩,直接报错(压缩空文件无意义)', async () => {
+  const empty = join(logDir, 'empty.png');
+  writeFileSync(empty, '');
+  let compressCalled = false;
+  const cfgC = { ...CFG, maxImageMB: 1, compressDeps: { platform: 'darwin', execFileFn: async () => { compressCalled = true; } } };
+  const r = await readLocalImage(empty, 'prompt', false, cfgC);
+  assert.equal(r.ok, false);
+  assert.match(r.text, /内容为空/);
+  assert.equal(compressCalled, false, '空文件不应触发压缩');
 });

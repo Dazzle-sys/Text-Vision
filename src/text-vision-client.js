@@ -1,9 +1,11 @@
 // 视觉调用核心共享模块:读配置 + 图片转 base64 + 调 OpenAI 兼容视觉模型
 // MCP server 和 PreToolUse hook 各自独立进程复用本文件,视觉逻辑只有一份。
-import { readFileSync, statSync } from 'node:fs';
-import { resolve, extname, isAbsolute } from 'node:path';
+import { readFileSync, statSync, unlinkSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { resolve, extname, isAbsolute, basename } from 'node:path';
 import { debugLog as log, appendLog, isSuccessLog } from './log.js';
 import { redactLocalPath } from './redact.js';
+import { tryCompressImage } from './image-compress.js';
 
 // ---------------------------------------------------------------------------
 // 调试日志:DEBUG_VISION=1 时打印到 stderr(不影响 MCP stdout 协议),复用 log.js 的 debugLog
@@ -27,10 +29,16 @@ export function buildConfig(env = process.env) {
   };
   const rawTokens = (env.VISION_MAX_TOKENS ?? '').trim();
   const tokensNum = Number(rawTokens);
+  // VISION_API_BASE 支持逗号分隔多个 OpenAI 兼容端点,按序 fallback(第一个为主端点,向后兼容)。
+  // 逐个 trim + 去尾斜杠 + 过滤空段;URL 的 path 段里出现逗号极罕见,可接受(文档注明)。
+  const apiBases = (env.VISION_API_BASE || '').toString().split(',').map(s => s.trim().replace(/\/+$/, '')).filter(Boolean);
   return {
-    apiBase: (env.VISION_API_BASE || '').toString().replace(/\/+$/, ''),
-    apiKey: env.VISION_API_KEY || '',
-    model: env.VISION_MODEL || '',
+    // 字符串型 env 统一 trim(与 logFilePath/defaultShotsDir/resolvePsExe 等一致):
+    // 避免带首尾空白的 base 把空格带进 URL、key 带空格破坏 Authorization 头、model 带空格导致请求 4xx
+    apiBase: apiBases[0] || '',
+    apiBases,
+    apiKey: (env.VISION_API_KEY || '').toString().trim(),
+    model: (env.VISION_MODEL || '').toString().trim(),
     timeoutMs: Math.max(1000, toNum(env.VISION_TIMEOUT, 90000)),
     maxImageMB: Math.max(1, toNum(env.VISION_MAX_IMAGE_MB, 10)),
     // maxTokens:null = 未配置(由 callVision 按场景取默认);0 = 显式关闭(不发送 max_tokens 字段,
@@ -38,7 +46,10 @@ export function buildConfig(env = process.env) {
     // 避免手滑设负值把"默认"变成"关闭"
     maxTokens: rawTokens !== '' && Number.isFinite(tokensNum) && tokensNum >= 0 ? tokensNum : null,
     // 失败重试次数(429/5xx/网络瞬时错误),0 表示不重试;限制在 0-5 之间防手滑
-    maxRetries: Math.min(5, Math.max(0, Math.floor(toNum(env.VISION_MAX_RETRIES, 1))))
+    maxRetries: Math.min(5, Math.max(0, Math.floor(toNum(env.VISION_MAX_RETRIES, 1)))),
+    // 成功结果内存缓存条目上限:0(默认)关闭;正数开启。命中同图+同提示词时省一次视觉调用。
+    // 仅存于本进程(内存),不落盘——图片内容不持久化,重启即清。
+    cacheSize: Math.max(0, Math.floor(toNum(env.VISION_CACHE_SIZE, 0)))
   };
 }
 
@@ -48,12 +59,15 @@ const warnedPlainHttpBases = new Set();
 
 function loadConfig() {
   const cfg = buildConfig();
-  // apiBase 可能内嵌凭据(https://user:pass@host/v1),打日志前先去除,避免 DEBUG 日志泄露
-  log(`配置: base=${redactUrlCreds(cfg.apiBase)} model=${cfg.model} timeout=${cfg.timeoutMs} maxImageMB=${cfg.maxImageMB} maxTokens=${cfg.maxTokens ?? '默认'} maxRetries=${cfg.maxRetries}`);
+  // apiBase 可能内嵌凭据(https://user:pass@host/v1),打日志前先去除,避免 DEBUG 日志泄露;
+  // 多端点(逗号分隔)逐个脱敏后一并展示
+  log(`配置: base=${cfg.apiBases.map(redactUrlCreds).join(',')} model=${cfg.model} timeout=${cfg.timeoutMs} maxImageMB=${cfg.maxImageMB} maxTokens=${cfg.maxTokens ?? '默认'} maxRetries=${cfg.maxRetries} cacheSize=${cfg.cacheSize}`);
   // 非 HTTPS 端点会让 API Key 与图片内容明文传输,值得显式提醒(只在同一 base 首次出现时提示一次)
-  if (cfg.apiBase && !cfg.apiBase.startsWith('https://') && !warnedPlainHttpBases.has(cfg.apiBase)) {
-    warnedPlainHttpBases.add(cfg.apiBase);
-    console.error('[text-vision] 警告:VISION_API_BASE 未使用 HTTPS(非 https:// 开头),API Key 与图片内容将明文传输,建议改用 HTTPS 端点。');
+  for (const base of cfg.apiBases) {
+    if (base && !base.startsWith('https://') && !warnedPlainHttpBases.has(base)) {
+      warnedPlainHttpBases.add(base);
+      console.error('[text-vision] 警告:VISION_API_BASE 含非 HTTPS 端点,API Key 与图片内容将明文传输,建议改用 HTTPS。');
+    }
   }
   return cfg;
 }
@@ -187,6 +201,43 @@ const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 // 重试退避等待,默认真实 setTimeout;测试可经 cfg.retrySleep 注入即时实现(与 cfg 注入同模式),避免用例真等几百 ms
 const realRetrySleep = ms => new Promise(r => setTimeout(r, ms));
 
+// ---------------------------------------------------------------------------
+// 成功结果缓存(仅内存,默认关闭):同图 + 同提示词重复调用时省一次视觉调用。
+// key = sha256(apiBase|model|b64|prompt|ocr) 前缀,不存图片内容本身,不落盘。
+// Map 插入序即最旧,超 cacheSize 清最旧(FIFO 够用,视觉结果无热度差异,无需 LRU)。
+// 仅缓存成功文本;失败结果不缓存(瞬时可重试,缓存反而不利)。
+// ---------------------------------------------------------------------------
+const cacheStore = new Map();
+/** 测试/调试用:清空全部缓存条目。 */
+export function clearVisionCache() {
+  cacheStore.clear();
+}
+
+function cacheKey(cfg, b64, promptText, ocr) {
+  // apiBase 取 cfg.apiBases[0](主端点)还是全部?缓存语义是"同配置同图同问",主端点即代表配置,取一个即可
+  return createHash('sha256')
+    .update(cfg.apiBase || '')
+    .update('\u0000').update(cfg.model || '')
+    .update('\u0000').update(b64)
+    .update('\u0000').update(promptText || '')
+    .update('\u0000').update(ocr ? '1' : '0')
+    .digest('hex').slice(0, 24);
+}
+
+function cacheGet(cfg, b64, promptText, ocr) {
+  if (!(cfg.cacheSize > 0)) return null;
+  return cacheStore.get(cacheKey(cfg, b64, promptText, ocr)) ?? null;
+}
+
+function cacheSet(cfg, b64, promptText, ocr, text) {
+  if (!(cfg.cacheSize > 0)) return;
+  cacheStore.set(cacheKey(cfg, b64, promptText, ocr), text);
+  // 超出上限清最旧,防无界增长
+  while (cacheStore.size > cfg.cacheSize) {
+    cacheStore.delete(cacheStore.keys().next().value);
+  }
+}
+
 // source 描述调用来源(如 "描述 C:\Users\...\images.jpg" / "OCR ..." / "截屏"),失败日志里精确定位
 // 是哪一次调用失败;sourceLabel 是成功日志用的纯来源标签("描述"/"OCR"/"截屏")——成功只需留痕、
 // 无需精确定位,也避免被看图路径累积进日志文件。调用方不传时按 ocr 标志兜底为"描述"/"OCR"。
@@ -196,14 +247,23 @@ async function callVision(b64, mime, promptText, ocr, cfg, source, sourceLabel) 
   const src = source || (ocr ? 'OCR' : '描述');
   // ?? 而非 ||:显式传空字符串也保留(来源标签不会是空,防御未来调用方误传空串回退到含路径的 src)
   const label = sourceLabel ?? src;
-  if (!cfg.apiBase || !cfg.apiKey || !cfg.model) {
+  // 端点列表:buildConfig 解析出的 apiBases;测试直接注入 cfg 时可能只有 apiBase(单端点),兼容兜底
+  const bases = (Array.isArray(cfg.apiBases) && cfg.apiBases.length ? cfg.apiBases : (cfg.apiBase ? [cfg.apiBase] : []));
+  if (!bases[0] || !cfg.apiKey || !cfg.model) {
     const msg = '视觉引擎未配置。请设置环境变量 VISION_API_BASE / VISION_API_KEY / VISION_MODEL(或在接入工具的 MCP 配置里注入 env)。';
     // 配置缺失是最常见的"日志里查不到报错"根因,失败必落盘
     appendLog('vision_failed', `${src} ${msg} 模型=${cfg.model || '(空)'}`);
     return { ok: false, text: msg };
   }
 
-  const url = cfg.apiBase.includes('/chat/completions') ? cfg.apiBase : `${cfg.apiBase}/chat/completions`;
+  // 缓存命中:同图同问不重复消耗视觉调用,返回缓存文本并留一条 cache 记录(成功日志不动,避免误导成"又调了一次")
+  const cached = cacheGet(cfg, b64, promptText, ocr);
+  if (cached != null) {
+    appendLog('vision_cache', `${label} 缓存命中 模型=${cfg.model}`);
+    log(`缓存命中 模型=${cfg.model}`);
+    return { ok: true, text: cached };
+  }
+
   // system 提示词按场景切换(描述/OCR),给模型行为约束
   const system = ocr ? OCR_SYSTEM : DESCRIBE_SYSTEM;
   // max_tokens:未配置(null)时按场景取默认(OCR 用更长上限,避免长文档/长截图被截断);
@@ -225,6 +285,24 @@ async function callVision(b64, mime, promptText, ocr, cfg, source, sourceLabel) 
     ...(typeof maxTokens === 'number' && maxTokens > 0 ? { max_tokens: maxTokens } : {})
   };
 
+  // 多端点 fallback:按序尝试每个 base;单个 base 时行为与旧版完全一致。
+  // 端点"不可用"(网络瞬时错误/429/5xx/超时)才换下一个;确定性失败(401/非 JSON/空内容/未返回内容)
+  // 换 base 不解决(同 key 大概率同结果),直接停。每个尝试过的端点都留失败日志,便于排查是哪个挂了。
+  let result = null;
+  for (const base of bases) {
+    const url = base.includes('/chat/completions') ? base : `${base}/chat/completions`;
+    result = await tryBase(url, body, cfg, src, label);
+    if (result.ok) {
+      cacheSet(cfg, b64, promptText, ocr, result.text);
+      return { ok: true, text: result.text };
+    }
+    if (!result.canFallback) break;
+  }
+  return { ok: result.ok, text: result.text };
+}
+
+/** 单个端点内的请求 + 重试循环:返回 { ok, text, canFallback }。不抛异常。 */
+async function tryBase(url, body, cfg, src, label) {
   const maxRetries = Number.isFinite(cfg.maxRetries) ? cfg.maxRetries : 1;
   const sleep = cfg.retrySleep ?? realRetrySleep;
   const startedAt = Date.now();
@@ -243,14 +321,16 @@ async function callVision(b64, mime, promptText, ocr, cfg, source, sourceLabel) 
     // 成功行只拼来源标签(label),不拼 source 里的原始路径——成功无需精确定位,也不该让路径累积进日志
     if (r.ok) {
       if (isSuccessLog()) appendLog('vision_ok', `${label} 成功 耗时=${elapsed}ms${status} 模型=${cfg.model}`);
-    } else {
-      appendLog('vision_failed', `${src} ${r.text} 耗时=${elapsed}ms${status} 模型=${cfg.model}`);
+      log(`成功 耗时=${elapsed}ms${status}`);
+      return { ok: true, text: r.text };
     }
-    log(`${r.ok ? '成功' : '失败'} 耗时=${elapsed}ms${status}`);
-    return { ok: r.ok, text: r.text };
+    appendLog('vision_failed', `${src} ${r.text} 耗时=${elapsed}ms${status} 模型=${cfg.model}`);
+    log(`失败 耗时=${elapsed}ms${status}`);
+    // 端点"不可用"才换下一个:可重试的错误(网络/429/5xx)或超时(该端点可能挂了);其余确定性失败不换
+    return { ok: false, text: r.text, canFallback: r.retryable || r.timeout === true };
   }
   // 理论上不可达(最多 maxRetries 次后必 return),兜底
-  return { ok: false, text: '视觉请求失败:未知错误' };
+  return { ok: false, text: '视觉请求失败:未知错误', canFallback: false };
 }
 
 /** 单次请求:返回 { ok, text, retryable, status? }。不抛异常。 */
@@ -274,7 +354,7 @@ async function tryOnce(url, body, cfg) {
     clearTimeout(timer); // fetch 抛错(网络/DNS 不可达)时同样清掉定时器
     const msg = err.name === 'AbortError' ? timeoutText(cfg.timeoutMs) : `视觉请求失败: ${redactUrlCreds(err.message)}`;
     // 网络瞬时错误可重试;超时(AbortError)不可重试,避免无限拖长
-    return { ok: false, text: msg, retryable: err.name !== 'AbortError', status: null };
+    return { ok: false, text: msg, retryable: err.name !== 'AbortError', timeout: err.name === 'AbortError', status: null };
   }
 
   // 响应体读取同样受同一 abort 超时保护:请求头到达不代表 body 一定送达
@@ -286,7 +366,7 @@ async function tryOnce(url, body, cfg) {
         detail = sanitizeDetail(await res.text(), cfg.apiKey);
       } catch (err) {
         if (err.name === 'AbortError') {
-          return { ok: false, text: timeoutText(cfg.timeoutMs), retryable: false, status: res.status };
+          return { ok: false, text: timeoutText(cfg.timeoutMs), retryable: false, timeout: true, status: res.status };
         }
         // 响应体读取中途断开:不再静默吞掉,给出可排查线索(错误消息也可能含 URL 内嵌凭据,一并脱敏)
         detail = `(响应体读取失败: ${redactUrlCreds(err.message)})`;
@@ -297,7 +377,7 @@ async function tryOnce(url, body, cfg) {
     data = await res.json();
   } catch (err) {
     if (err.name === 'AbortError') {
-      return { ok: false, text: timeoutText(cfg.timeoutMs), retryable: false, status: res.status };
+      return { ok: false, text: timeoutText(cfg.timeoutMs), retryable: false, timeout: true, status: res.status };
     }
     // 区分"响应不是合法 JSON"(SyntaxError,通常是服务端确定性问题,重试无意义)
     // 与"响应体读取中断"(网络断流,可重试)——否则 ECONNRESET 会被误报成 JSON 解析错误,误导排查
@@ -364,24 +444,35 @@ async function readLocalImage(path, promptText, ocr, cfg) {
     return { ok: false, text: msg };
   }
   cfg = cfg || loadConfig();
+  let compressed = null; // 大图超限自动压缩的临时产物,finally 负责删除
   try {
     // stat 预检:超限/空文件直接拒绝,避免把超大文件读进内存;stat 与 read 之间存在文件被替换的
     // 极小 TOCTOU 窗口,读后仍用 buf.length 复核一次(双保险:既省 IO 又消除中间态)。
-    const preOver = overSizeError(statSync(abs).size, cfg.maxImageMB);
+    const st = statSync(abs);
+    const preOver = overSizeError(st.size, cfg.maxImageMB);
     if (preOver) {
-      appendLog('vision_failed', `${src} ${preOver.text}`);
-      return preOver;
+      // 大图超限才尝试自动压缩为 JPEG(尽力而为):空文件/目录(0 字节)是无效输入,压缩无意义,直接报错。
+      // 压缩成功用产物,压缩不可用/仍超限才回落到原报错。
+      // compressDeps 供测试注入 mock(与 retrySleep 同模式,默认 undefined 走真实系统工具)。
+      if (st.size > 0) compressed = await tryCompressImage(abs, cfg.maxImageMB * 1024 * 1024, cfg.compressDeps);
+      if (compressed) {
+        log(`图片超限,已自动压缩:${basename(abs)}(${(st.size / 1024 / 1024).toFixed(1)}MB) → ${(compressed.sizeBytes / 1024).toFixed(1)}KB`);
+      } else {
+        appendLog('vision_failed', `${src} ${preOver.text}`);
+        return preOver;
+      }
     }
-    const buf = readFileSync(abs);
+    const readPath = compressed?.filePath ?? abs;
+    const buf = readFileSync(readPath);
     const over = overSizeError(buf.length, cfg.maxImageMB);
     if (over) {
       appendLog('vision_failed', `${src} ${over.text}`);
       return over;
     }
     // MIME 优先按文件头识别(防扩展名与实际内容不符),识别不了再回退扩展名;
-    // isImagePath 已保证是支持的扩展名,mimeFromExt 必返回非 null
-    const mime = sniffMime(buf) || mimeFromExt(abs);
-    log(`读取图片 ${abs}(${(buf.length / 1024).toFixed(1)}KB, ${mime})`);
+    // isImagePath 已保证是支持的扩展名,mimeFromExt 必返回非 null;压缩产物统一是 JPEG
+    const mime = compressed ? 'image/jpeg' : (sniffMime(buf) || mimeFromExt(abs));
+    log(`读取图片 ${readPath}(${(buf.length / 1024).toFixed(1)}KB, ${mime})`);
     return await callVision(buf.toString('base64'), mime, promptText, ocr, cfg, src, label);
   } catch (err) {
     if (err.code === 'ENOENT') {
@@ -395,6 +486,9 @@ async function readLocalImage(path, promptText, ocr, cfg) {
     const msg = `读取图片失败: ${redactLocalPath(redactUrlCreds(err.message))}`;
     appendLog('vision_failed', `${src} ${msg}`);
     return { ok: false, text: msg };
+  } finally {
+    // 压缩临时产物用完即删,不残留系统临时目录
+    if (compressed) { try { unlinkSync(compressed.filePath); } catch { /* 已删 */ } }
   }
 }
 

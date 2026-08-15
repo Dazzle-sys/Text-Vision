@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { buildConfig } from '../src/text-vision-client.js';
 
 const VISION_KEYS = ['VISION_API_BASE', 'VISION_API_KEY', 'VISION_MODEL', 'VISION_TIMEOUT',
-  'VISION_MAX_IMAGE_MB', 'VISION_MAX_TOKENS', 'VISION_MAX_RETRIES'];
+  'VISION_MAX_IMAGE_MB', 'VISION_MAX_TOKENS', 'VISION_MAX_RETRIES', 'VISION_CACHE_SIZE'];
 
 // 保存/恢复环境变量,避免用例间互相污染
 const saved = {};
@@ -47,6 +47,16 @@ test('正常配置正确解析,apiBase 去掉尾部斜杠', () => {
   assert.equal(cfg.maxImageMB, 20);
   assert.equal(cfg.maxTokens, 1000);
   assert.equal(cfg.maxRetries, 3);
+});
+
+test('字符串型 env 带首尾空白 → 统一 trim(apiBase 再去尾斜杠,避免空白进 URL/鉴权头/请求体)', () => {
+  process.env.VISION_API_BASE = '  https://dashscope.aliyuncs.com/compatible-mode/v1/  ';
+  process.env.VISION_API_KEY = '  sk-1234567890  ';
+  process.env.VISION_MODEL = '  qwen-vl-max  ';
+  const cfg = buildConfig();
+  assert.equal(cfg.apiBase, 'https://dashscope.aliyuncs.com/compatible-mode/v1');
+  assert.equal(cfg.apiKey, 'sk-1234567890');
+  assert.equal(cfg.model, 'qwen-vl-max');
 });
 
 test('非数字配置回退默认值,避免 Number() 得到 NaN', () => {
@@ -92,4 +102,36 @@ test('VISION_MAX_TOKENS 负数/非数字 → null(未配置,由调用方按场�
 test('VISION_MAX_TOKENS=0 → 0(显式关闭:不发送 max_tokens 字段)', () => {
   process.env.VISION_MAX_TOKENS = '0';
   assert.equal(buildConfig().maxTokens, 0);
+});
+
+test('VISION_API_BASE 逗号分隔多端点 → apiBases 数组,apiBase 取第一个(向后兼容)', () => {
+  process.env.VISION_API_BASE = 'https://one.example.com/v1, https://two.example.com/v1/ ';
+  const cfg = buildConfig();
+  assert.equal(cfg.apiBase, 'https://one.example.com/v1');
+  assert.deepEqual(cfg.apiBases, ['https://one.example.com/v1', 'https://two.example.com/v1']);
+});
+
+test('VISION_API_BASE 只一个端点(无逗号)→ apiBases 单元素', () => {
+  process.env.VISION_API_BASE = 'https://only.example.com/v1';
+  const cfg = buildConfig();
+  assert.deepEqual(cfg.apiBases, ['https://only.example.com/v1']);
+});
+
+test('VISION_API_BASE 空 → apiBases 空数组(未配置)', () => {
+  assert.deepEqual(buildConfig().apiBases, []);
+});
+
+test('VISION_CACHE_SIZE:默认 0(关闭缓存)', () => {
+  assert.equal(buildConfig().cacheSize, 0);
+});
+
+test('VISION_CACHE_SIZE:正数开启,负数/非数字钳到 0(不缓存)', () => {
+  process.env.VISION_CACHE_SIZE = '50';
+  assert.equal(buildConfig().cacheSize, 50);
+  process.env.VISION_CACHE_SIZE = '-1';
+  assert.equal(buildConfig().cacheSize, 0);
+  process.env.VISION_CACHE_SIZE = 'abc';
+  assert.equal(buildConfig().cacheSize, 0);
+  process.env.VISION_CACHE_SIZE = '0.5';
+  assert.equal(buildConfig().cacheSize, 0); // 取整
 });

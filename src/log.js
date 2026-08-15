@@ -20,11 +20,11 @@ export function debugLog(...args) {
 }
 
 /** 是否把"成功"的视觉调用写入日志文件(VISION_LOG_SUCCESS:默认开,设 0/false 关闭;失败日志不受此开关影响)。
- * 注意是宽松匹配:除 0/false 外的任意值(含空串、带空白、'False' 大写等)都视为开启,且不 trim、大小写敏感——
- * 与 DEBUG_VISION 的精确白名单(仅 1/true)语义相反,这是历史行为,想关闭请准确填 0 或 false。
+ * 判定:先 trim 首尾空白再比较(避免配置里尾随空格/.env CRLF 让 '0' 静默失效);大小写仍敏感('FALSE' 视为开启),
+ * 想关闭请准确填 0 或 false。与 DEBUG_VISION 的精确白名单(仅 1/true)语义相反,是有意区分。
  * env 可注入(fake env),与 logFilePath/appendLog 保持一致,便于测试。 */
 export function isSuccessLog(env = process.env) {
-  const v = env.VISION_LOG_SUCCESS;
+  const v = (env.VISION_LOG_SUCCESS || '').trim();
   return v !== '0' && v !== 'false';
 }
 

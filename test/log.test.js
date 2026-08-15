@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { isDebug, debugLog, logFilePath, appendLog } from '../src/log.js';
+import { isDebug, debugLog, logFilePath, appendLog, isSuccessLog } from '../src/log.js';
 import { visionDir } from '../src/repo-root.js';
 
 // 每个用例用独立临时目录,避免日志文件互相污染
@@ -19,6 +19,17 @@ test('logFilePath:未配置 → text-vision 仓库根下的 .text-vision/log.txt
 
 test('logFilePath:配置 VISION_LOG_FILE → 返回配置值(去空白)', () => {
   assert.equal(logFilePath({ VISION_LOG_FILE: '  C:/logs/tv.log  ' }), 'C:/logs/tv.log');
+});
+
+test('isSuccessLog:默认开启;0/false 关闭;带空白先 trim;FALSE 大写仍视为开启', () => {
+  assert.equal(isSuccessLog({}), true);
+  assert.equal(isSuccessLog({ VISION_LOG_SUCCESS: '' }), true);
+  assert.equal(isSuccessLog({ VISION_LOG_SUCCESS: '0' }), false);
+  assert.equal(isSuccessLog({ VISION_LOG_SUCCESS: 'false' }), false);
+  assert.equal(isSuccessLog({ VISION_LOG_SUCCESS: ' 0 ' }), false);   // 尾随空格/.env CRLF 也能正确关闭
+  assert.equal(isSuccessLog({ VISION_LOG_SUCCESS: ' false ' }), false);
+  assert.equal(isSuccessLog({ VISION_LOG_SUCCESS: 'FALSE' }), true);  // 大小写敏感:大写视为开启
+  assert.equal(isSuccessLog({ VISION_LOG_SUCCESS: '1' }), true);
 });
 
 test('appendLog:写入指定路径,内容含时间戳 + 事件类型 + 详情', () => {

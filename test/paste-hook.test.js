@@ -2,21 +2,20 @@
 // 成功/OCR 场景走真实代码路径(读 test/test.png + mock fetch);无图/放行场景纯逻辑,不触网。
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { runPasteHook } from '../hooks/paste-image-hook.js';
+import { okRes, stubFetch, makeTempDir, REAL_FETCH } from './helpers.js';
 
-const REAL_FETCH = globalThis.fetch;
 const VISION_ENV = ['VISION_API_BASE', 'VISION_API_KEY', 'VISION_MODEL', 'VISION_TIMEOUT', 'VISION_MAX_IMAGE_MB', 'VISION_HOOK_MODE', 'VISION_MAX_RETRIES', 'VISION_LOG_FILE'];
 const saved = {};
-let logDir = '';
+let tmpLog;
 beforeEach(() => {
   for (const k of VISION_ENV) saved[k] = process.env[k];
   for (const k of VISION_ENV) delete process.env[k];
   process.env.VISION_MAX_RETRIES = '0'; // 关闭重试,避免失败用例真等退避
-  logDir = mkdtempSync(join(tmpdir(), 'text-vision-paste-hook-log-'));
-  process.env.VISION_LOG_FILE = join(logDir, 'log.txt');
+  tmpLog = makeTempDir('text-vision-paste-hook-log-');
+  process.env.VISION_LOG_FILE = join(tmpLog.dir, 'log.txt');
 });
 afterEach(() => {
   for (const k of VISION_ENV) {
@@ -24,16 +23,8 @@ afterEach(() => {
     else process.env[k] = saved[k];
   }
   globalThis.fetch = REAL_FETCH;
-  try { rmSync(logDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  tmpLog.rm();
 });
-
-const okRes = text => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: text } }] }) });
-
-function stubFetch(handler) {
-  const orig = globalThis.fetch;
-  globalThis.fetch = async (url, opts) => handler(url, opts);
-  return { restore: () => { globalThis.fetch = orig; } };
-}
 
 const CWD = process.cwd();
 const IMG = join(CWD, 'test', 'test.png'); // 真实存在的样例图
@@ -145,7 +136,7 @@ test('视觉调用失败 → 跳过该图,返回 null(不阻断消息)', async (
 test('图片超过 maxImageMB → 跳过(不注入超大 base64)', async () => {
   setupVision();
   process.env.VISION_MAX_IMAGE_MB = '1';
-  const big = join(logDir, 'big.png');
+  const big = join(tmpLog.dir, 'big.png');
   writeFileSync(big, Buffer.alloc(1_200_000));
   try {
     assert.equal(await runPasteHook({ prompt: `[Image 1] ${big}`, cwd: CWD }), null);
@@ -163,7 +154,7 @@ test('多图:超过 MAX_IMAGES(4)只处理前 4 张', async () => {
   // 6 个不同路径的图(内容无关,只看数量与上限截断)
   const files = [];
   for (let i = 1; i <= 6; i++) {
-    const p = join(logDir, `multi-${i}.png`);
+    const p = join(tmpLog.dir, `multi-${i}.png`);
     writeFileSync(p, Buffer.alloc(100));
     files.push(p);
   }

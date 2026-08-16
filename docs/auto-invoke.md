@@ -1,10 +1,10 @@
-# 三层自动调用机制:让文本模型"自己去看图"
+# 三层自动调用机制: 让文本模型"自己去看图"
 
 [English](auto-invoke.en.md) | 简体中文
 
 MCP server 解决"**能**看图";三层机制解决"**主动**看图"——模型在任务中自己决定调用视觉工具,而非等你手动喂描述。三层逐层增强,按需启用:
 
-> **分工定位**:读图类工具(`describe_image` / `ocr_image`)承接用户**贴图**与本地图片;截图类工具(`screen_capture` / `list_windows`)是给**执行任务的 AI 主动调用做视觉识别**的——模型需要看运行中程序的界面/状态时自己截,不靠用户手动截图。这份"主动截图"引导已内置进模板规则(见 [templates/](../templates/) 的【主动截图看界面】段)。
+> **分工定位**:读图类工具(`describe_image` / `ocr_image`)承接用户**贴图**与本地图片;截图类工具(`screen_capture` / `list_windows`)是给**执行任务的 AI 主动调用做视觉识别**的——模型需要看运行中程序的界面/状态时自己截,不靠用户手动截图。这份"主动截图"引导已内置进模板规则(见 [templates/](../templates/))。
 
 | 层 | 载体 | 适用工具 | 触发方式 | 可靠性 |
 |---|---|---|---|---|
@@ -95,11 +95,11 @@ echo '{"prompt":"分析这张图 [Image 1] test/test.png","cwd":"<本仓库绝�
 
 **原理**:在项目根放规则文件,写明"看图必须走 text-vision 工具",让模型形成自觉。这是 OpenCode、Cursor 等无 hook 工具里最主要的触发方式。
 
-> **关键:规则必须覆盖"粘贴/拖入图片"场景。** 宿主工具会把粘贴/拖入的图片保存为本地文件,模型能看到路径/文件名线索(`[Image 1] file x.png` / `![image](...)`)但看不到内容。规则要引导模型"别索要路径、自行定位落盘文件再调 `describe_image`"——否则模型可能回"我不支持看图"并要求重发图片。
+> **粘贴图引导已移至技能层**:宿主工具会把粘贴/拖入的图片保存为本地文件,模型能看到路径/文件名线索(`[Image 1] file x.png` / `![image](...)`)但看不到内容。规则模板已不含此段,需要模型自行识别粘贴图时,改用技能层(见 [skills/text-vision/SKILL.md](../skills/text-vision/SKILL.md))或开启 paste-image-hook(见第 1 节)。
 
 ### 2.1 `CLAUDE.md`(Claude Code 专用,放项目根)
 
-成品模板见 [`templates/CLAUDE.md`](../templates/CLAUDE.md),复制到项目根即可。核心要求:遇图必调 `text-vision` 工具、粘贴图片自行定位不索要路径、验证码/报错截图优先 `ocr_image`;**任务涉及运行中程序的界面/状态时主动 `list_windows()` + `screen_capture(target=…)` 截图观察(目标窗口可能含敏感画面时先问用户)**。
+成品模板见 [`templates/CLAUDE.md`](../templates/CLAUDE.md),复制到项目根即可。核心要求:遇图必调 `text-vision` 工具、验证码/报错截图优先 `ocr_image`;**任务涉及运行中程序的界面/状态时主动 `list_windows()` + `screen_capture(target=…)` 截图观察(目标窗口可能含敏感画面时先问用户)**。粘贴图识别引导在技能层(见 [skills/text-vision/SKILL.md](../skills/text-vision/SKILL.md))。
 
 ### 2.2 `AGENTS.md`(OpenCode / Cursor / Gemini CLI / Codex 等通用,放项目根)
 
@@ -113,7 +113,7 @@ echo '{"prompt":"分析这张图 [Image 1] test/test.png","cwd":"<本仓库绝�
 
 **原理**:技能(skill)是带 frontmatter 的说明文件,`description` 里的触发词命中时,模型自动加载并按其中步骤调用工具,比纯规则更结构化。
 
-放 `.claude/skills/text-vision/SKILL.md`(Claude Code 项目级技能目录),成品模板见 [`templates/SKILL.md`](../templates/SKILL.md)(含 frontmatter),复制过去即可。
+放 `.claude/skills/text-vision/SKILL.md`(Claude Code 项目级技能目录),成品见 [`skills/text-vision/SKILL.md`](../skills/text-vision/SKILL.md)(含 frontmatter),复制过去即可。
 
 ---
 

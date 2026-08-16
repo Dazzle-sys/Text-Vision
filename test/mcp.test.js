@@ -81,7 +81,6 @@ test('tools/list:注册了四个工具,名称与 schema 正确', async () => {
   assert.equal(screen.inputSchema.properties.target.type, 'string');
   assert.equal(screen.inputSchema.properties.focus.type, 'string');
   assert.equal(screen.inputSchema.properties.prompt.type, 'string', 'screen_capture 应有 prompt 参数');
-  assert.equal(screen.inputSchema.properties.clientArea.type, 'boolean', 'clientArea 应为布尔参数');
   // 全可选字段时 zod 可能省略 required 数组(undefined 等价于空),统一用空数组兜底断言
   // (target 必填由 handler 校验,不走 zod schema,便于给友好错误文案)
   const required = screen.inputSchema.required || [];
@@ -97,16 +96,6 @@ test('tools/list:注册了四个工具,名称与 schema 正确', async () => {
     assert.equal(t.annotations?.readOnlyHint, true, `${t.name} 应标注 readOnlyHint`);
   }
   assert.equal(tools.find(t => t.name === 'describe_image').title, '描述本地图片');
-});
-
-test('tools/call screen_capture:clientArea=true → capture 收到 clientArea(透传)', async () => {
-  const seen = [];
-  const c = await startServer({
-    capture: async (args) => { seen.push(args); return { b64: 'aGk=', mime: 'image/png' }; }
-  });
-  await c.request('tools/call', { name: 'screen_capture', arguments: { target: 'chrome', clientArea: true } });
-  assert.equal(seen[0].target, 'chrome');
-  assert.equal(seen[0].clientArea, true, 'clientArea 应透传给 capture 实现');
 });
 
 test('tools/call describe_image:mock 描述结果原样返回,isError=false', async () => {

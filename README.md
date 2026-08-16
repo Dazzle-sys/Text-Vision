@@ -1,6 +1,6 @@
 <div align="center">
 
-# Text-Vision:为无视觉文本模型提供视觉能力
+# Text-Vision: 为无视觉文本模型提供视觉能力
 
 [English](README.en.md) | 简体中文
 
@@ -44,7 +44,7 @@
 
 ## 快速开始
 
-需要 **Node.js ≥ 20**(基于 Node 内置 `fetch` 与 `node:test`)。两步跑起来:
+两步跑起来(前置要求:**Node.js ≥ 20**,见[安装](#安装)):
 
 ```bash
 # 1. 安装依赖
@@ -83,10 +83,13 @@ npm install
 |---|---|
 | `describe_image(path, focus?, prompt?)` | 描述本地图片(主体、颜色、布局、对象关系、图中文字) |
 | `ocr_image(path, prompt?)` | 提取图片中的文字,保留排版顺序(验证码、报错截图、文档截图) |
-| `screen_capture(target, focus?, clientArea?, prompt?)` | 截取指定程序窗口并描述。`target` 必填(窗口 ID/进程名/标题);`clientArea`(仅 Windows)为 true 时截客户区(去边框标题栏) |
+| `screen_capture(target, focus?, prompt?)` | 截取指定程序窗口并描述。`target` 必填(窗口 ID/进程名/标题) |
 | `list_windows()` | 列出当前打开的窗口(含最小化窗口,标注"已最小化";窗口 ID + 标题 + 进程名 + PID),供选择 `screen_capture` 的 target |
 
-全部返回**纯文字**。`prompt` 可选:传它时**原样**作为发给视觉模型的提问(覆盖 `focus` 与默认句式);不传则用默认描述/OCR 提示词(`describe_image` / `ocr_image`)或 `focus` /「指定的窗口:{target}」(`screen_capture`)。截指定窗口前先 `list_windows()` 拿窗口清单(窗口 ID/进程名/PID),再 `screen_capture(target='窗口 ID、进程名或标题')`。找不到匹配窗口/截图失败会**明确报错**并提示原因,不会回退全屏。`screen_capture` 成功(截图+描述均成功)时返回描述文本,并附 `[截图已保存到 <路径> …]`(落盘位置,仅保留最近 20 张);窗口存在降级/提示原因(如最小化窗口临时恢复)时额外附 `[提示] …`。截图成功但描述失败时返回错误文案,返回文本同样附 `[截图已保存到 <路径> …]` 提示落盘位置(截图已保留,避免用户不知情)。
+- **返回纯文字**:所有工具都返回文本,模型可直接阅读,无需再读图片二进制。
+- **`prompt` 参数(可选)**:传它时**原样**作为发给视觉模型的提问,覆盖 `focus` 与默认句式;不传则用默认描述/OCR 提示词(`describe_image` / `ocr_image`),`screen_capture` 用 `focus` /「指定的窗口:{target}」。
+- **截指定窗口**:先 `list_windows()` 拿窗口清单(窗口 ID/进程名/PID),再 `screen_capture(target='窗口 ID、进程名或标题')`。找不到匹配窗口/截图失败会**明确报错**并提示原因,不会回退全屏。
+- **返回附带信息**:`screen_capture` 成功(截图+描述均成功)时返回描述文本,并附 `[截图已保存到 <路径> …]`(落盘位置,仅保留最近 20 张);有降级/提示(如最小化窗口临时恢复)时额外附 `[提示] …`;截图成功但描述失败时返回错误文案,同样附 `[截图已保存到 <路径> …]`,避免你不知情。
 
 ## 配置
 
@@ -182,7 +185,7 @@ Claude Code、OpenCode、Cursor、Windsurf、Gemini CLI、Codex 等的**具体�
 | 技能层 | `.claude/skills/text-vision/SKILL.md` | 支持技能的工具 | 触发词命中时自动加载并调用 |
 | Hook 层 | `hooks/read-image-hook.js` + `hooks/paste-image-hook.js` | 仅 Claude Code | `PreToolUse` 拦截 `Read` 读图自动注入描述;**`UserPromptSubmit` 拦截用户粘贴/拖入的图片**也自动注入 |
 
-> **粘贴/拖入图片**:规则模板会引导模型"别索要路径、自行定位落盘文件再调 `describe_image`";在此基础上还可启用 `paste-image-hook`(`UserPromptSubmit` 事件)自动拦截——用户消息里带图片时,直接用视觉模型转成文字注入对话,模型第一时间"看见",不必等它自觉调工具。两条 hook 覆盖两个场景:Read 读图(模型主动读文件)+ 粘贴图(用户直接贴)。
+> **粘贴/拖入图片**:技能层(`SKILL.md`)会引导模型"别索要路径、自行定位落盘文件再调 `describe_image`";在此基础上还可启用 `paste-image-hook`(`UserPromptSubmit` 事件)自动拦截——用户消息里带图片时,直接用视觉模型转成文字注入对话,模型第一时间"看见",不必等它自觉调工具。两条 hook 覆盖两个场景:Read 读图(模型主动读文件)+ 粘贴图(用户直接贴)。
 >
 > **截图类工具给 AI 用**:`screen_capture` / `list_windows` 主要给执行任务的 AI 主动调用做视觉识别(看界面/程序状态);普通用户直接贴图走 `describe_image` / `ocr_image` 即可。
 >
@@ -205,10 +208,6 @@ Claude Code、OpenCode、Cursor、Windsurf、Gemini CLI、Codex 等的**具体�
 
 `screen_capture(target=…)` 只截指定程序窗口,**不支持全屏**。先 `list_windows()` 拿窗口清单(含窗口 ID/标题/进程名/PID),据此填 target——传窗口 ID 可精确锁定,传进程名或标题为模糊匹配(命中多个同名窗口时取枚举序第一个,多实例程序如多个 Chrome 窗口请用窗口 ID 精确锁定;单字符 target 如 `a` 只做精确/前缀匹配,不做包含匹配,避免误截)。找不到匹配窗口、枚举失败或窗口截图失败时**明确报错**并给出原因(如"窗口已关闭""被完全遮挡"),不再回退全屏。
 
-### 截窗口客户区(clientArea,仅 Windows)
-
-`screen_capture(target=…, clientArea=true)` 截取窗口**客户区**(去掉边框和标题栏),视觉描述聚焦窗口内容、不受边框噪声干扰。该参数仅 Windows 生效,macOS/Linux 忽略。
-
 各平台实现与依赖:
 
 - **Windows**:EnumWindows 枚举(含最小化窗口,输出窗口 ID/进程名/PID);PrintWindow 截取(能取被遮挡窗口本体);最小化窗口临时恢复截完还原(任务栏短暂闪动);PrintWindow 失败(全透明)时仅窗口未被遮挡才降级为区域截图,仍失败则明确报错。零安装
@@ -230,11 +229,11 @@ Claude Code、OpenCode、Cursor、Windsurf、Gemini CLI、Codex 等的**具体�
 
 ## 相关文档
 
-- [templates/](templates/) — 可复制规则模板:`CLAUDE.md`(Claude Code)/ `AGENTS.md`(OpenCode、Cursor 等)/ `SKILL.md`(技能层)
+- [templates/](templates/) — 可复制规则模板:`CLAUDE.md`(Claude Code)/ `AGENTS.md`(OpenCode、Cursor 等)
 - [hooks/read-image-hook.js](hooks/read-image-hook.js) — PreToolUse hook:读图自动拦截并注入描述
 - [hooks/paste-image-hook.js](hooks/paste-image-hook.js) — UserPromptSubmit hook:粘贴/拖入图片自动拦截并注入描述
 - [hooks/shared.js](hooks/shared.js) — 两条 hook 共享的纯逻辑(stdin 读取 / 路径防护 / vision_note 文案组装 / hook 场景默认超时)
-- [skills/](skills/) — 插件自带技能(`skills/text-vision/SKILL.md`,Claude Code 插件安装时自动加载)
+- [skills/](skills/) — 插件自带技能(`skills/text-vision/SKILL.md`,Claude Code 插件安装时自动加载;也可直接复制到其他项目作技能模板)
 - [scripts/](scripts/) — 辅助脚本:`gen-test-image.js`(重生成样例图)、`check-doc-paths.js`(文档路径检查)、`check-version.js`(三份清单版本一致性校验)、`smoke-windows.js`(Windows 真机冒烟,CI 用)
 - [server.json](server.json) — MCP Registry 发布清单(与 npm 包 `mcpName` 字段对应)
 - [.claude-plugin/plugin.json](.claude-plugin/plugin.json) — Claude Code 插件清单(一步分发 hook + 技能 + MCP server)

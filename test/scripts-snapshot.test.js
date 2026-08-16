@@ -11,9 +11,9 @@ const scriptsDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 's
 const read = f => readFileSync(join(scriptsDir, f), 'utf8');
 
 // ---------------------------------------------------------------------------
-// win-capture.ps1:指定窗口截屏(最小化恢复 / 遮挡守卫 / 客户区裁剪)
+// win-capture.ps1:指定窗口截屏(最小化恢复 / 遮挡守卫)
 // ---------------------------------------------------------------------------
-test('win-capture.ps1:关键符号(最小化恢复/遮挡守卫/客户区裁剪/失败退出)', () => {
+test('win-capture.ps1:关键符号(最小化恢复/遮挡守卫/失败退出)', () => {
   const ps = read('win-capture.ps1');
   for (const symbol of [
     'SetProcessDPIAware',       // 进程 DPI 感知,高分屏按物理像素
@@ -28,10 +28,6 @@ test('win-capture.ps1:关键符号(最小化恢复/遮挡守卫/客户区裁剪/
     '-32000',                   // 屏幕外坐标
     '$origRect',                // 记录最小化窗口原始还原位置
     'Test-Transparent',         // 纯色窗口误判修复:只认全透明
-    'Crop-Frame',               // 客户区裁剪
-    'ClientToScreen',           // 客户区左上角坐标转换
-    'GetClientRect',            // 客户区尺寸
-    'TEXT_VISION_CLIENT_AREA',  // clientArea 开关
     'exit 1'                    // 全程失败退出(不再回退全屏)
   ]) {
     assert.ok(ps.includes(symbol), `win-capture.ps1 应包含 "${symbol}"`);

@@ -10,8 +10,6 @@ public struct WinRect { public int Left, Top, Right, Bottom; }
 public struct POINT { public int X, Y; }
 public class Win32 {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out WinRect lpRect);
-  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hWnd, out WinRect lpRect);
-  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
@@ -30,7 +28,6 @@ public class Win32 {
 }';
 $out = $env:TEXT_VISION_SHOT;
 $notePath = $env:TEXT_VISION_NOTE;
-$clientArea = ($env:TEXT_VISION_CLIENT_AREA -eq '1');
 $script:noteParts = @();
 function Write-Note($m) { $script:noteParts += $m }
 function Flush-Note { if ($notePath -and $script:noteParts.Count -gt 0) { [System.IO.File]::WriteAllText($notePath, ($script:noteParts -join ';'), (New-Object System.Text.UTF8Encoding($false))) } }
@@ -64,42 +61,16 @@ function Save-Jpeg($bmp) {
   $params.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, 85L);
   $bmp.Save($out, $enc, $params);
 }
-# 客户区裁剪(去边框和标题栏):GetClientRect 拿客户区尺寸,客户区原点 (0,0) 经 ClientToScreen 得屏幕坐标,
-# 与窗口矩形(GetWindowRect)差值即边框/标题栏在窗口位图内的偏移。窗口位图以 GetWindowRect 为坐标原点,
-# PrintWindow 与 CopyFromScreen 输出都是这个坐标系,裁剪偏移可直接套用。
-# 任何异常(句柄失效/越界/Clone 失败)一律返回 $null 并记 note 保留整窗口,不因裁剪异常丢弃截图。
-# 已知残余:Win11 最大化窗口 GetWindowRect 可能偏大(含隐藏边框),裁剪偏移会带边框误差,可接受。
-function Crop-Frame($h, $rect, $bmp) {
-  $cr = New-Object WinRect;
-  if (-not [Win32]::GetClientRect($h, [ref]$cr)) { Write-Note '无法获取窗口客户区,边框裁剪跳过'; return $null }
-  $pt = New-Object POINT;
-  if (-not [Win32]::ClientToScreen($h, [ref]$pt)) { Write-Note '无法转换客户区坐标,边框裁剪跳过'; return $null }
-  $l = $pt.X - $rect.Left; $t = $pt.Y - $rect.Top;
-  $cw = $cr.Right - $cr.Left; $ch = $cr.Bottom - $cr.Top;
-  if ($cw -le 0 -or $ch -le 0 -or $l -lt 0 -or $t -lt 0 -or ($l + $cw) -gt $bmp.Width -or ($t + $ch) -gt $bmp.Height) {
-    Write-Note '客户区矩形越界或尺寸异常,边框裁剪跳过'; return $null
-  }
-  try {
-    $crop = $bmp.Clone((New-Object System.Drawing.Rectangle $l, $t, $cw, $ch), $bmp.PixelFormat);
-    $bmp.Dispose();
-    return $crop;
-  } catch { Write-Note '客户区裁剪失败,保留整窗口'; return $null }
-}
-# 统一的"保存位图":clientArea 开启时先按客户区裁剪,再存 JPEG。返回 $true/$false。
+# 统一的"保存位图":直接存 JPEG。返回 $true/$false。
 # 调用方需确保传入位图在本函数返回后不再使用(本函数负责 Dispose)。
-function Save-Shot($h, $rect, $bmp) {
-  $target = $bmp;
-  if ($clientArea) {
-    $crop = Crop-Frame $h $rect $bmp;   # 成功:clone 返回、原图已 dispose;失败:返回 $null、原图仍存活
-    if ($crop) { $target = $crop }
-  }
-  try { Save-Jpeg $target; $target.Dispose(); return $true }
-  catch { try { $target.Dispose() } catch { /* 已释放则忽略 */ }; Write-Note '保存截图失败'; return $false }
+function Save-Shot($bmp) {
+  try { Save-Jpeg $bmp; $bmp.Dispose(); return $true }
+  catch { try { $bmp.Dispose() } catch { /* 已释放则忽略 */ }; Write-Note '保存截图失败'; return $false }
 }
 # 对窗口执行一次 PrintWindow(PW_RENDERFULLCONTENT=2):能取到被遮挡窗口本体,含多数 GPU 渲染应用。
 # PrintWindow 返回 $ok 即信任渲染成功(除非全透明)——刻意权衡(见 Test-Transparent 注释)。
 # 成功返回 $true;失败返回 $false,由调用方决定降级(延时重试/区域截图)。
-function Invoke-PrintWindowSave($h, $w, $hh, $rect) {
+function Invoke-PrintWindowSave($h, $w, $hh) {
   $bmp = New-Object System.Drawing.Bitmap $w, $hh;
   $g = [System.Drawing.Graphics]::FromImage($bmp);
   $hdc = $g.GetHdc();
@@ -108,7 +79,7 @@ function Invoke-PrintWindowSave($h, $w, $hh, $rect) {
   finally { $g.ReleaseHdc($hdc) }
   if ($ok -and -not (Test-Transparent $bmp)) {
     $g.Dispose();
-    return (Save-Shot $h $rect $bmp);
+    return (Save-Shot $bmp);
   }
   $g.Dispose(); $bmp.Dispose();
   return $false;
@@ -152,7 +123,7 @@ try {
       # --- 3) PrintWindow(PW_RENDERFULLCONTENT):刚恢复的窗口可能仍在渲染 → 延时重试最多 3 次 ---
       $attempts = 0;
       do {
-        if (Invoke-PrintWindowSave $h $w $hh $rect) { $savedWindow = $true; break }
+        if (Invoke-PrintWindowSave $h $w $hh) { $savedWindow = $true; break }
         Start-Sleep -Milliseconds 200;
         $attempts++;
       } while ($attempts -lt 3);
@@ -184,7 +155,7 @@ try {
             $g.Dispose();
             if ($copyOk) {
               if (Test-Blank $bmp) { $bmp.Dispose(); Write-Note '窗口区域截图也失败' }
-              elseif (Save-Shot $h $rect $bmp) { $savedWindow = $true }
+              elseif (Save-Shot $bmp) { $savedWindow = $true }
               else { Write-Note '窗口区域截图保存失败' }
             } else { $bmp.Dispose() }
           } else { Write-Note '窗口被完全遮挡,跳过区域截图(避免截到遮挡层)' }

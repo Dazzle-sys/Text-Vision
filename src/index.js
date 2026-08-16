@@ -104,16 +104,15 @@ export function createServer(deps = {}) {
       inputSchema: z.object({
         focus: z.string().optional().describe('关注的要点,如"当前界面布局""错误弹窗内容"'),
         prompt: z.string().optional().describe('调用者提供的完整提示词,非空时原样作为发给视觉模型的提问(覆盖 focus 与默认句式);不传则用 focus 或"指定的窗口:{target}"'),
-        target: z.string().optional().describe('必填:要截取的程序/窗口——窗口 ID、进程名或窗口标题(如 456、chrome、未命名 - 记事本),模糊匹配。被遮挡/最小化窗口也能截到本体内容(该能力仅 Windows 生效;macOS 对被遮挡窗口可能截到遮挡层、最小化到 Dock 的窗口无法枚举)。找不到匹配窗口时明确报错。'),
-        clientArea: z.boolean().optional().describe('(仅 Windows 生效)为 true 时截窗口客户区(去边框和标题栏),视觉描述聚焦窗口内容;macOS/Linux 忽略此参数')
+        target: z.string().optional().describe('必填:要截取的程序/窗口——窗口 ID、进程名或窗口标题(如 456、chrome、未命名 - 记事本),模糊匹配。被遮挡/最小化窗口也能截到本体内容(该能力仅 Windows 生效;macOS 对被遮挡窗口可能截到遮挡层、最小化到 Dock 的窗口无法枚举)。找不到匹配窗口时明确报错。')
       })
     },
-    wrapTool('截屏', async ({ focus, target, clientArea, prompt }) => {
+    wrapTool('截屏', async ({ focus, target, prompt }) => {
       // target 必填:本工具只截指定窗口,不再支持全屏/默认窗口。空白 target 也给友好错误,而非走到枚举
       if (!target || !String(target).trim()) {
         return textResult({ ok: false, text: NO_TARGET_MSG });
       }
-      const shot = await capture({ target, clientArea });
+      const shot = await capture({ target });
       // 防御:注入的 capture 实现/未来回归返回空时,给明确错误文案,而非 TypeError(不向客户端抛内部异常)
       if (!shot || typeof shot.b64 !== 'string') {
         return textResult({ ok: false, text: '截屏失败:截屏实现未返回有效的图片数据。' });

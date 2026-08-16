@@ -1,4 +1,4 @@
-# MCP 接入指南:把 text-vision 接进你的 AI 工具
+# MCP 接入指南: 把 text-vision 接进你的 AI 工具
 
 [English](integration-guide.en.md) | 简体中文
 
@@ -153,5 +153,5 @@ MCP 配置里**唯一要改的就是 `args` 里的启动路径**。复制项目�
 | 工具里看不到四个工具 | 配置改完没重启工具;或 server 名与配置不一致 |
 | 提示"视觉引擎未配置" | 没设 `VISION_*`,按 [第 6 节](#6-用环境变量配置推荐) 注入 `env`(或先 `export`) |
 | 图片路径传相对路径找不到 | 相对路径按 **MCP server 启动目录**解析,建议传绝对路径 |
-| 模型回"我不支持看图/请提供图片路径" | 规则模板未覆盖"粘贴图片"场景。按 docs/auto-invoke.md 2.x 更新项目根 AGENTS.md/CLAUDE.md |
-| 模型不主动截图看界面 | 规则未覆盖"主动截图"场景。按 docs/auto-invoke.md 2.x 更新项目根 AGENTS.md/CLAUDE.md(模板含【主动截图看界面】引导) |
+| 模型回"我不支持看图/请提供图片路径" | 粘贴图自动识别未覆盖。启用技能层(`skills/text-vision/SKILL.md`)或 `paste-image-hook`(见 docs/auto-invoke.md) |
+| 模型不主动截图看界面 | 规则未覆盖"主动截图"场景。按 docs/auto-invoke.md 2.x 更新项目根 AGENTS.md/CLAUDE.md(模板含主动截图引导) |

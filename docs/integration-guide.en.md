@@ -153,5 +153,5 @@ The **only field to change** in the MCP configuration is the startup path in `ar
 | The four tools do not appear | The tool was not restarted after the config change, or the server name does not match |
 | Tool calls return "vision engine not configured" | The `VISION_*` env vars are not set — inject them into the `env` field per [section 6](#6-configuration-via-environment-variables-recommended), or `export` them first |
 | Relative image paths are not found | Relative paths resolve against **the MCP server's startup directory** — use absolute paths |
-| Model replies "I can't see images / please provide the image path" | The rule template doesn't cover the pasted/dropped-image scenario. Update the project root's `AGENTS.md` / `CLAUDE.md` per docs/auto-invoke.en.md section 2 |
-| Model doesn't proactively capture the screen | The rule doesn't cover the "proactive capture" scenario. Update the project root's `AGENTS.md` / `CLAUDE.md` per docs/auto-invoke.en.md section 2 (the template includes the "Proactively capture screens" guidance) |
+| Model replies "I can't see images / please provide the image path" | Pasted-image handling isn't covered. Enable the skill layer (`skills/text-vision/SKILL.md`) or the paste hook (see docs/auto-invoke.en.md) |
+| Model doesn't proactively capture the screen | The rule doesn't cover the "proactive capture" scenario. Update the project root's `AGENTS.md` / `CLAUDE.md` per docs/auto-invoke.en.md section 2 (the templates include proactive-capture guidance) |

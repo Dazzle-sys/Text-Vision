@@ -44,7 +44,7 @@ English | [简体中文](README.md)
 
 ## Quick Start
 
-Requires **Node.js >= 20** (built on Node's built-in `fetch` and `node:test`). Two steps to get running:
+Two steps to get running (requires **Node.js >= 20**; see [Installation](#installation)):
 
 ```bash
 # 1. Install dependencies
@@ -82,10 +82,15 @@ npm install
 |---|---|
 | `describe_image(path, focus?, prompt?)` | Describe a local image (subject, colors, layout, object relations, text) |
 | `ocr_image(path, prompt?)` | Extract text from an image, preserving layout (captchas, error screenshots, document screenshots) |
-| `screen_capture(target, focus?, clientArea?, prompt?)` | Capture a specific program window and describe it. `target` is required (window ID / process name / title); `clientArea` (Windows only) captures the client area, stripping the frame and title bar |
+| `screen_capture(target, focus?, prompt?)` | Capture a specific program window and describe it. `target` is required (window ID / process name / title) |
 | `list_windows()` | List currently open windows (includes minimized ones, marked "minimized"; window ID + title + process + PID), for choosing `screen_capture`'s `target` |
 
-All return **plain text**, directly usable by text models. `prompt` is optional: when passed, it is sent **verbatim** as the question to the vision model (overriding `focus` and the default wording); when omitted, the default describe/OCR prompt (`describe_image` / `ocr_image`) or `focus` / `指定的窗口:{target}` ("specified window: {target}", the literal default wording) (`screen_capture`) is used. To capture a specific window, call `list_windows()` first, then `screen_capture(target='window ID, process name or title')`. No match, enumeration failure, or capture failure **errors out explicitly** with the reason — there is no full-screen fallback. On success (capture + description), `screen_capture` returns the description plus `[截图已保存到 <path> …]` (the save location; only the last 20 are kept). When the capture carries a degradation/info note (e.g. a minimized window was temporarily restored), it additionally appends `[提示] …`. If the description fails after a successful capture, the returned text is the error message and still appends `[截图已保存到 <path> …]` to tell you where the shot was saved (it is kept, so you stay informed). Note: bracketed strings such as `[截图已保存到 <path> …]` and `[提示] …` are the tool's Chinese runtime output.
+- **Plain-text output**: every tool returns text the model can read directly — no need to read image bytes.
+- **`prompt` (optional)**: passed **verbatim** to the vision model as the question (overriding `focus` and the default wording); when omitted, the default describe/OCR prompt is used (`describe_image` / `ocr_image`), or `focus` / `指定的窗口:{target}` for `screen_capture`.
+- **Targeted capture**: call `list_windows()` first, then `screen_capture(target='window ID, process name or title')`. No match, enumeration failure, or capture failure **errors out explicitly** — no full-screen fallback.
+- **Returned extras**: on success (capture + description) `screen_capture` returns the description plus `[截图已保存到 <path> …]` (the save location; the last 20 are kept). Degradation notes (e.g. a minimized window was temporarily restored) append `[提示] …`. If the description fails after a successful capture, the text is the error message and still appends `[截图已保存到 <path> …]` so you know where the shot was kept.
+
+> Note: bracketed strings such as `[截图已保存到 <path> …]` and `[提示] …` are the tool's Chinese runtime output.
 
 ## Configuration
 
@@ -181,7 +186,7 @@ Let the model **call vision on its own** during a task, instead of you feeding d
 | Skill layer | `.claude/skills/text-vision/SKILL.md` | skill-capable tools | Auto-loads and calls on trigger words |
 | Hook layer | `hooks/read-image-hook.js` + `hooks/paste-image-hook.js` | Claude Code only | `PreToolUse` intercepts `Read` on images and injects a text description; **`UserPromptSubmit` intercepts pasted/dropped images** and injects a description too |
 
-> **Pasted / dropped images**: besides the rule templates (guiding the model to "not ask for the path, locate the saved file itself, then call `describe_image`"), you can enable `paste-image-hook` (`UserPromptSubmit`) so pasted images are auto-converted to text the moment they arrive — the model "sees" them right away, without calling a tool on its own. The two hooks cover both directions: `Read` on images (model reading a file) + pasted images (user pasting directly).
+> **Pasted / dropped images**: besides the skill layer (`SKILL.md`) guiding the model to "not ask for the path, locate the saved file itself, then call `describe_image`", you can enable `paste-image-hook` (`UserPromptSubmit`) so pasted images are auto-converted to text the moment they arrive — the model "sees" them right away, without calling a tool on its own. The two hooks cover both directions: `Read` on images (model reading a file) + pasted images (user pasting directly).
 >
 > **Capture tools are for the AI**: `screen_capture` / `list_windows` are mainly for an executing AI to call on its own for vision (watching UI / program state); end users simply paste images and use `describe_image` / `ocr_image`.
 >
@@ -204,10 +209,6 @@ Let the model **call vision on its own** during a task, instead of you feeding d
 
 `screen_capture(target=…)` captures only the specified window — **full-screen capture is not supported**. Call `list_windows()` first for the window list (window ID / title / process / PID), then fill in `target`: a window ID pins the exact window; a process name or title does fuzzy matching (if several windows share the name, the first enumerated one is picked — pin the exact window by ID for multi-instance programs such as multiple Chrome windows; a one-character target such as `a` matches exactly or by prefix only, never by substring, to avoid grabbing the wrong window). No match, enumeration failure, or capture failure **errors out explicitly** with the reason (e.g. "window closed", "fully occluded") — no more full-screen fallback.
 
-### Client-Area Capture (clientArea, Windows only)
-
-`screen_capture(target=…, clientArea=true)` captures only the window's **client area** (stripping the frame and title bar), so the vision description focuses on content instead of frame noise. Effective on Windows only; macOS/Linux ignore it.
-
 Per-platform implementation and dependencies:
 
 - **Windows**: enumerates with EnumWindows (includes minimized windows; outputs window ID / process / PID); captures with **PrintWindow** (retrieves the occluded window's own content); minimized windows are temporarily restored off-screen for capture then re-minimized (brief taskbar flicker); when PrintWindow fails (fully transparent), falls back to a window-region capture only if the window isn't occluded; if that still fails, errors out explicitly. Zero-install
@@ -229,11 +230,11 @@ Per-platform implementation and dependencies:
 
 ## Related Docs
 
-- [templates/](templates/) — ready-made rule templates: `CLAUDE.md` (Claude Code) / `AGENTS.md` (OpenCode, Cursor, etc.) / `SKILL.md` (skill layer)
+- [templates/](templates/) — ready-made rule templates: `CLAUDE.md` (Claude Code) / `AGENTS.md` (OpenCode, Cursor, etc.)
 - [hooks/read-image-hook.js](hooks/read-image-hook.js) — PreToolUse hook: intercepts image reads and injects descriptions
 - [hooks/paste-image-hook.js](hooks/paste-image-hook.js) — UserPromptSubmit hook: intercepts pasted/dropped images and injects descriptions
 - [hooks/shared.js](hooks/shared.js) — shared pure logic for both hooks (stdin reading, path protection, vision_note assembly, hook default timeout)
-- [skills/](skills/) — plugin-bundled skill (`skills/text-vision/SKILL.md`, auto-loaded when installed as a Claude Code plugin)
+- [skills/](skills/) — plugin-bundled skill (`skills/text-vision/SKILL.md`, auto-loaded when installed as a Claude Code plugin; also copyable into other projects as a skill template)
 - [scripts/](scripts/) — helper scripts: `gen-test-image.js` (regenerate the sample image), `check-doc-paths.js` (doc path check), `check-version.js` (version consistency check across the three manifests), `smoke-windows.js` (Windows smoke test for CI)
 - [server.json](server.json) — MCP Registry publishing manifest (matches the npm `mcpName` field)
 - [.claude-plugin/plugin.json](.claude-plugin/plugin.json) — Claude Code plugin manifest (one-step distribution of hooks + skill + MCP server)

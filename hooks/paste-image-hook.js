@@ -6,7 +6,7 @@
 //   { "hook_event_name": "UserPromptSubmit", "prompt": "分析这张图 [Image 1] C:\\Users\\...\\code.png", "cwd": "..." }
 // 图片来源(双通道,兼顾宿主差异):
 //   1) input.images 数组(部分宿主把粘贴图作为结构化字段传 file_path)
-//   2) prompt 文本里的路径线索:[Image N] <path>、![image](<path>)、裸图片路径
+//   2) prompt 文本里的路径线索:[Image N] <path>、![image](<path>)(不做裸路径猜测,避免误匹配代码字符串)
 // stdout 输出(exit 0,只输出一个 JSON;不阻断用户消息,只是附加描述):
 //   { "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "【粘贴图片视觉描述】..." } }
 //

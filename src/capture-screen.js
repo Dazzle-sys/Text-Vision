@@ -1,7 +1,7 @@
 // 跨平台指定窗口截屏:按操作系统分派系统自带命令。平台级函数(captureWindows/captureMac/captureLinux)
 // 统一返回 { filePath, note? };主入口 captureScreen 再读文件转 base64,返回 { b64, filePath, sizeBytes, mime, note?, targetLabel? }。
 // 只支持指定窗口:captureScreen 必传 target(窗口 ID/进程名/标题),经 list-windows.js 枚举匹配到窗口 id 后截取,
-// 失败(未命中/枚举失败/窗口截图失败)一律明确报错,不再回退全屏。仅 Windows 支持 clientArea 截客户区(去边框标题栏)。
+// 失败(未命中/枚举失败/窗口截图失败)一律明确报错,不再回退全屏。
 // 截图落盘到存储根 screenshots(默认仓库根 .text-vision,仓库只读安装时回退用户主目录 ~/.text-vision,见 storage-root.js;
 // 保留最近 MAX_SHOTS 张),方便查看,不随临时目录清理。
 //   win32 → PowerShell + System.Drawing(零安装)
@@ -88,7 +88,6 @@ function cleanupNotePath(notePath) {
 // PrintWindow(PW_RENDERFULLCONTENT,能取被遮挡窗口本体,含多数 GPU 渲染应用)→ 非全透明则成功;
 // PrintWindow 失败/全透明则延时重试 → 未移出屏幕且未被遮挡时才允许 CopyFromScreen 窗口区域 → 仍失败则 exit 1,
 // 降级原因经 TEXT_VISION_NOTE 文件逐级累积,失败时随退出码回传 JS 报错。不再有全屏回退。
-// TEXT_VISION_CLIENT_AREA=1 时成功位图按客户区裁剪(去边框标题栏,仅 Windows)。
 // 脚本从独立文件读取(import.meta.url 定位),获得独立 diff 与 PowerShell 语法检查;内容仍以 -Command 传入,
 // 保持 spawn 参数形态(args[3] 为脚本全文)不变。转义说明:JS 模板字符串里的 \\( 在 .ps1 里还原为 \(。
 const WIN_PS = readFileSync(new URL('./scripts/win-capture.ps1', import.meta.url), 'utf8');
@@ -125,7 +124,7 @@ if ([Wr]::IsWindow($h) -and -not [Wr]::IsIconic($h) -and [Wr]::GetWindowRect($h,
 
 // 注:平台级函数用不同注入名——captureWindows 用 spawnFn(需持有子进程句柄以便超时 kill),
 // captureMac/captureLinux 用 execFileFn(一次性执行、无需 kill 语义);二者是同一注入角色。
-export function captureWindows({ spawnFn = spawn, timeout = SLOW_TIMEOUT, fallbackDelay = 5000, windowId, shotsRoot, psExe, clientArea = false } = {}) {
+export function captureWindows({ spawnFn = spawn, timeout = SLOW_TIMEOUT, fallbackDelay = 5000, windowId, shotsRoot, psExe } = {}) {
   return new Promise((resolvePromise, reject) => {
     // windowId 必传:本工具只截指定窗口,不再有全屏模式。
     // 防御:windowId 会拼进 PS 模板的 [IntPtr][long],注入前先校验纯数字,
@@ -149,8 +148,6 @@ export function captureWindows({ spawnFn = spawn, timeout = SLOW_TIMEOUT, fallba
     // 残留的 note-* 由 pruneShots 统一回收(见其 doc 注释),正常路径读后即删不残留。
     const notePath = tempShotPath(shotDir, 'note.txt', 'note');
     const env = { ...process.env, TEXT_VISION_SHOT: outPath, TEXT_VISION_HWND: String(windowId), TEXT_VISION_NOTE: notePath };
-    // 内部开关(非用户环境变量):clientArea 截客户区由工具参数经 captureScreen 透传到这里
-    if (clientArea) env.TEXT_VISION_CLIENT_AREA = '1';
     let child;
     try {
       child = spawnFn(psExe ?? resolvePsExe(), ['-NoProfile', '-NonInteractive', '-Command', WIN_PS], {
@@ -323,10 +320,9 @@ async function resolveTarget(target, listWindowsFn) {
  * 截取指定窗口,返回 { b64, filePath, sizeBytes, mime, note?, targetLabel? }。
  * target 必传(窗口 ID/进程名/标题,模糊匹配),找不到/枚举失败/截图失败都明确抛错,不回退全屏。
  * targetLabel 记录实际命中的窗口(命中窗口的 title||process),供上层提示"截的是哪个窗口"。
- * clientArea(仅 Windows 生效)为 true 时截窗口客户区(去边框标题栏),macOS/Linux 忽略。
  * 截图保留在 shotsRoot(默认仓库根 .text-vision/screenshots),每次成功后 pruneShots 只留最近 MAX_SHOTS 张。
- * deps 可选,用于测试注入 mock 的 spawn/execFile/listWindows,以及 shotsRoot(测试用临时目录避免污染仓库)、
- * clientArea(透传 captureWindows)。platform 也可注入(默认 process.platform),让跨平台分派逻辑可在任意 CI 平台单测;
+ * deps 可选,用于测试注入 mock 的 spawn/execFile/listWindows,以及 shotsRoot(测试用临时目录避免污染仓库)。
+ * platform 也可注入(默认 process.platform),让跨平台分派逻辑可在任意 CI 平台单测;
  * 注入 platform 时窗口枚举(listWindows)同样透传该平台,截图与枚举走同一分派,不会按真实平台枚举。
  */
 export async function captureScreen(deps = {}) {

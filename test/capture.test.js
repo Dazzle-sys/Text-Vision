@@ -153,22 +153,6 @@ test('captureWindows:退出码 0 但未产出截图文件 → 拒绝(与 Linux/M
 }));
 
 // --- 指定窗口模式(windowId)---
-test('captureWindows:clientArea=true → env 注入 TEXT_VISION_CLIENT_AREA=1;false 时不注入', withShots(async (shotsRoot) => {
-  for (const [clientArea, expect] of [[true, '1'], [false, undefined]]) {
-    let spawnArgs;
-    const child = fakeChild();
-    const spawnFn = (cmd, args, opts) => {
-      spawnArgs = { cmd, args, opts };
-      writeFileSync(opts.env.TEXT_VISION_SHOT, Buffer.from([0xFF, 0xD8, 0xFF, 0xE0])); // 模拟 PS 写出 jpeg
-      return child;
-    };
-    const p = captureWindows({ shotsRoot, spawnFn, timeout: 30000, fallbackDelay: 1000, windowId: '456', clientArea });
-    child.emit('close', 0);
-    await p;
-    assert.equal(spawnArgs.opts.env.TEXT_VISION_CLIENT_AREA, expect, `clientArea=${clientArea} 时 env 应为 ${expect}`);
-  }
-}));
-
 test('captureWindows:带 windowId 且 PS 写入 note 文件 → note 返回文本并删除文件', withShots(async (shotsRoot) => {
   let spawnArgs;
   const child = fakeChild();
@@ -200,8 +184,8 @@ test('captureWindows:带 windowId 但退出码非 0 → 拒绝,note 降级原因
   assert.equal(existsSync(notePath), false, '失败时 note 文件应被清理');
 }));
 
-test('captureWindows:WIN_PS 含最小化恢复/遮挡守卫/客户区裁剪关键符号(回归守卫)', withShots(async (shotsRoot) => {
-  // 字符串包含断言即可,不解析 PowerShell:防止将来误删"最小化临时恢复 + 遮挡守卫 + 客户区裁剪"逻辑
+test('captureWindows:WIN_PS 含最小化恢复/遮挡守卫关键符号(回归守卫)', withShots(async (shotsRoot) => {
+  // 字符串包含断言即可,不解析 PowerShell:防止将来误删"最小化临时恢复 + 遮挡守卫"逻辑
   let winPs;
   const child = fakeChild();
   const spawnFn = (cmd, args, opts) => {
@@ -228,10 +212,6 @@ test('captureWindows:WIN_PS 含最小化恢复/遮挡守卫/客户区裁剪关�
     '$origRect',              // 记录最小化窗口原始还原位置
     'SetWindowPos($h, [IntPtr]::Zero, $origRect.Left', // 还原时先移回原位置再最小化
     'Test-Transparent',       // 纯色窗口误判修复:只认全透明而非纯色
-    'Crop-Frame',             // 客户区裁剪(去边框标题栏)
-    'ClientToScreen',         // 客户区左上角坐标转换
-    'GetClientRect',          // 客户区尺寸
-    'TEXT_VISION_CLIENT_AREA',// clientArea 开关
     'exit 1'                  // 全程失败退出(不再回退全屏)
   ]) {
     assert.ok(winPs.includes(symbol), `WIN_PS 应包含 "${symbol}"`);

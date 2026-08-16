@@ -32,11 +32,13 @@ async function startServer(overrides = {}) {
     describe: async (path) => ({ ok: true, text: `描述:${path}` }),
     ocr: async (path) => ({ ok: true, text: `OCR:${path}` }),
     capture: async ({ target }) => ({ b64: 'aGk=', mime: 'image/png' }),
-    // 参数位断言:index.js 调 describeBase64 时第 4 位 cfg 必须显式 undefined 占位、第 5 位 source 带来源
-    // (mock 无 filePath 时是纯 '截屏';capture 带 filePath 时是 "截屏 <截图路径>")、第 6 位 sourceLabel='截屏'
+    // 参数对象断言:index.js 调 describeBase64 时 cfg 必须缺省(undefined,走 loadConfig)、source 带来源
+    // (mock 无 filePath 时是纯 '截屏';capture 带 filePath 时是 "截屏 <截图路径>")、sourceLabel='截屏'
     // (成功日志纯标签)。防未来把 source 误放 cfg 位(参数错位回归会溜过 3 参 mock)——真实链路由下方专用用例兜底
-    describeBase64: async (b64, mime, focus, cfg, source, sourceLabel) => {
-      assert.equal(cfg, undefined, 'cfg 必须显式 undefined 占位');
+    describeBase64: async ({ b64, mime, focus, cfg, source, sourceLabel }) => {
+      assert.equal(cfg, undefined, 'cfg 必须缺省(undefined),由 describeImageFromBase64 内部走 loadConfig');
+      assert.equal(b64, 'aGk=', 'b64 应来自截屏产物');
+      assert.equal(mime, 'image/png', 'mime 应来自截屏产物');
       assert.ok(String(source).startsWith('截屏'), 'source 应以"截屏"开头,可带截图文件路径');
       assert.equal(sourceLabel, '截屏', 'sourceLabel 应为截屏(成功日志纯标签)');
       return { ok: true, text: `截图:${focus}` };
@@ -86,9 +88,6 @@ test('tools/list:注册了四个工具,名称与 schema 正确', async () => {
   assert.ok(!required.includes('target'), 'target 可选(schema 层)');
   assert.ok(!required.includes('focus'), 'focus 可选');
   assert.ok(!required.includes('prompt'), 'prompt 可选');
-
-  const listW = tools.find(t => t.name === 'list_windows');
-  assert.ok(listW, '应注册 list_windows');
 
   // 工具注释:title 短名 + readOnlyHint(四个工具都是读类,无副作用)
   const annotations = ['describe_image', 'ocr_image', 'screen_capture', 'list_windows']
@@ -143,19 +142,19 @@ test('tools/call ocr_image:传 prompt → mock ocr 收到 (path, prompt)', async
   assert.deepEqual(seen, [{ path: 'code.png', prompt: '提取所有中文' }], 'prompt 应原样透传给实现层');
 });
 
-test('tools/call screen_capture:传 prompt → describeBase64 第 7 位收到原样 prompt、第 3 位 focus 仍为默认句式', async () => {
+test('tools/call screen_capture:传 prompt → describeBase64 收到原样 prompt、focus 仍为默认句式', async () => {
   const seen = [];
   const c = await startServer({
-    describeBase64: async (b64, mime, focus, cfg, source, sourceLabel, prompt) => {
-      assert.equal(cfg, undefined, 'cfg 必须显式 undefined 占位');
-      seen.push({ b64, mime, focus, cfg, source, sourceLabel, prompt });
+    describeBase64: async (opts) => {
+      assert.equal(opts.cfg, undefined, 'cfg 必须缺省(undefined),走 loadConfig');
+      seen.push(opts);
       return { ok: true, text: '截图:ok' };
     }
   });
   const res = await c.request('tools/call', { name: 'screen_capture', arguments: { target: 'chrome', prompt: '看这个窗口的布局' } });
   assert.equal(res.result.isError, false);
-  assert.equal(seen[0].focus, '指定的窗口:chrome', '第 3 位 focus 仍为默认句式(供无 prompt 时模板兜底)');
-  assert.equal(seen[0].prompt, '看这个窗口的布局', '第 7 位 prompt 原样透传');
+  assert.equal(seen[0].focus, '指定的窗口:chrome', 'focus 仍为默认句式(供无 prompt 时模板兜底)');
+  assert.equal(seen[0].prompt, '看这个窗口的布局', 'prompt 原样透传');
 });
 
 test('tools/call screen_capture:不传 target → 明确报错(必须指定 target)', async () => {
@@ -197,8 +196,8 @@ test('tools/call screen_capture:mock capture 带 filePath → source 拼上截�
   const filePath = join(repoRoot, '.text-vision', 'screenshots', 'shot-456.jpeg');
   const c = await startServer({
     capture: async () => ({ b64: 'aGk=', mime: 'image/png', filePath }),
-    describeBase64: async (b64, mime, focus, cfg, source, sourceLabel) => {
-      assert.equal(cfg, undefined, 'cfg 必须显式 undefined 占位');
+    describeBase64: async ({ source, sourceLabel, cfg }) => {
+      assert.equal(cfg, undefined, 'cfg 必须缺省(undefined),走 loadConfig');
       assert.equal(source, `截屏 ${filePath}`, 'source 应拼上截图落盘路径,供失败日志定位');
       assert.equal(sourceLabel, '截屏', 'sourceLabel 应为纯标签,不含路径');
       return { ok: true, text: '截图:ok' };
@@ -229,6 +228,17 @@ test('tools/call screen_capture:描述失败时 note 不拼入返回文本,但�
   assert.ok(!res.result.content[0].text.includes('[提示]'), '描述失败时文本是错误文案,不拼 note');
   assert.match(res.result.content[0].text, /视觉请求超时/);
   assert.deepEqual(c.logs, [['screen_capture_degrade', '窗口已最小化']], '降级原因仍已落盘');
+});
+
+test('tools/call screen_capture:描述失败但有 filePath → 错误文本仍附截图保存路径(用户知情)', async () => {
+  const c = await startServer({
+    capture: async () => ({ b64: 'aGk=', mime: 'image/png', filePath: join(repoRoot, '.text-vision', 'screenshots', 'shot-fail.jpeg') }),
+    describeBase64: async () => ({ ok: false, text: '视觉请求超时(90000ms)' })
+  });
+  const res = await c.request('tools/call', { name: 'screen_capture', arguments: { target: 'notepad' } });
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /视觉请求超时/);
+  assert.match(res.result.content[0].text, /截图已保存到 .*shot-fail\.jpeg/, '描述失败也应提示截图落盘位置');
 });
 
 test('tools/call list_windows:返回窗口清单 → 文本含标题、进程、PID 与 ID', async () => {
@@ -337,9 +347,9 @@ test('tools/call screen_capture:capture 抛含路径异常 → 兜底统一错�
 });
 
 test('tools/call screen_capture:真实 describeImageFromBase64 链路(不注入 mock)→ 描述成功', async () => {
-  // 回归防护:index.js 调 describeBase64 时第 4 参 cfg 必须显式 undefined、第 5 参 source='截屏'。
-  // 若 cfg 被字符串污染,describeImageFromBase64 会把 cfg 当字符串、读不到 apiKey,误报"视觉引擎未配置",
-  // 本用例 isError 断言即失败——此前各用例全注入 3 参 mock,从未覆盖真实参数契约,该回归会溜过 CI。
+  // 回归防护:index.js 调 describeBase64 走 options 对象,capture 产物(b64/mime)与 source/sourceLabel 正确透传。
+  // 若 source 被误当 cfg 传,describeImageFromBase64 会把 cfg 当字符串、读不到 apiKey,误报"视觉引擎未配置",
+  // 本用例 isError 断言即失败——此前各用例全注入 mock,从未覆盖真实参数契约,该回归会溜过 CI。
   const saved = {};
   for (const k of ['VISION_API_BASE', 'VISION_API_KEY', 'VISION_MODEL', 'VISION_LOG_FILE']) saved[k] = process.env[k];
   const logDir = mkdtempSync(join(tmpdir(), 'tv-mcp-log-'));

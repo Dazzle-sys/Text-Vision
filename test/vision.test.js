@@ -65,19 +65,19 @@ afterEach(() => {
 // base64 输入校验
 // ---------------------------------------------------------------------------
 test('base64 输入非法字符 → 拒绝', async () => {
-  const r = await describeImageFromBase64('!!!not-base64!!!', 'image/png', null, CFG);
+  const r = await describeImageFromBase64({ b64: '!!!not-base64!!!', mime: 'image/png', cfg: CFG });
   assert.equal(r.ok, false);
   assert.match(r.text, /base64/);
 });
 
 test('base64 长度非法(mod 4 == 1,解码为残缺字节)→ 拒绝', async () => {
-  const r = await describeImageFromBase64('abcdE', 'image/png', null, CFG);
+  const r = await describeImageFromBase64({ b64: 'abcdE', mime: 'image/png', cfg: CFG });
   assert.equal(r.ok, false);
   assert.match(r.text, /base64/);
 });
 
 test('空 base64(0 字节内容)不当作成功内容发出去', async () => {
-  const r = await describeImageFromBase64('', 'image/png', null, CFG);
+  const r = await describeImageFromBase64({ b64: '', mime: 'image/png', cfg: CFG });
   assert.equal(r.ok, false);
   assert.match(r.text, /空/);
 });
@@ -86,7 +86,7 @@ test('base64 超过 maxImageMB → 拒绝,不发请求', async () => {
   const big = Buffer.alloc(1_500_000).toString('base64'); // ~2MB 解码字节
   const s = stubFetch(() => okRes('x'));
   try {
-    const r = await describeImageFromBase64(big, 'image/png', null, { ...CFG, maxImageMB: 1 });
+    const r = await describeImageFromBase64({ b64: big, mime: 'image/png', cfg: { ...CFG, maxImageMB: 1 } });
     assert.equal(r.ok, false);
     assert.match(r.text, /过大/);
     assert.equal(s.calls.length, 0, '超限时不应发出请求');
@@ -99,7 +99,7 @@ test('base64 超过 maxImageMB → 拒绝,不发请求', async () => {
 test('未配置视觉引擎(空 base/apiKey/model)→ 明确提示,不发请求', async () => {
   const s = stubFetch(() => okRes('x'));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, { ...CFG, apiBase: '', apiKey: '', model: '' });
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: { ...CFG, apiBase: '', apiKey: '', model: '' } });
     assert.equal(r.ok, false);
     assert.match(r.text, /未配置/);
     assert.equal(s.calls.length, 0);
@@ -112,7 +112,7 @@ test('未配置视觉引擎(空 base/apiKey/model)→ 明确提示,不发请求'
 test('成功:返回模型文字并 trim', async () => {
   const s = stubFetch(() => okRes('  图片里有只猫  '));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', '关注猫', CFG);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', focus: '关注猫', cfg: CFG });
     assert.equal(r.ok, true);
     assert.equal(r.text, '图片里有只猫');
     // 请求体携带 base64 data URL 与 prompt
@@ -128,7 +128,7 @@ test('429 按 maxRetries 重试后成功', async () => {
   let n = 0;
   const s = stubFetch(() => (++n === 1 ? errRes(429, 'rate limited') : okRes('第二次成功')));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
     assert.equal(r.ok, true);
     assert.equal(r.text, '第二次成功');
     assert.equal(s.calls.length, 2, '应重试一次');
@@ -138,7 +138,7 @@ test('429 按 maxRetries 重试后成功', async () => {
 test('401 认证错误不重试(最多只发一次)', async () => {
   const s = stubFetch(() => errRes(401, 'invalid api key'));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, { ...CFG, maxRetries: 3 });
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: { ...CFG, maxRetries: 3 } });
     assert.equal(r.ok, false);
     assert.match(r.text, /HTTP 401/);
     assert.equal(s.calls.length, 1, '401 不应重试');
@@ -148,7 +148,7 @@ test('401 认证错误不重试(最多只发一次)', async () => {
 test('5xx 可重试,重试次数受 maxRetries 上限约束', async () => {
   const s = stubFetch(() => errRes(503, 'overloaded'));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, { ...CFG, maxRetries: 2 });
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: { ...CFG, maxRetries: 2 } });
     assert.equal(r.ok, false);
     assert.equal(s.calls.length, 3, '应重试 2 次(共 3 次请求)');
   } finally { s.restore(); }
@@ -164,7 +164,7 @@ test('超时(AbortError)不重试,给出明确超时文案', async () => {
     });
   }));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, { ...CFG, timeoutMs: 50, maxRetries: 2 });
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: { ...CFG, timeoutMs: 50, maxRetries: 2 } });
     assert.equal(r.ok, false);
     assert.match(r.text, /超时/);
     assert.equal(s.calls.length, 1, '超时不可重试,只发一次');
@@ -174,7 +174,7 @@ test('超时(AbortError)不重试,给出明确超时文案', async () => {
 test('响应不是合法 JSON → 明确报错,不重试', async () => {
   const s = stubFetch(() => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token'); } }));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
     assert.equal(r.ok, false);
     assert.match(r.text, /合法 JSON/);
     assert.equal(s.calls.length, 1);
@@ -184,7 +184,7 @@ test('响应不是合法 JSON → 明确报错,不重试', async () => {
 test('模型返回空内容 → 不算成功', async () => {
   const s = stubFetch(() => okRes('   '));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
     assert.equal(r.ok, false);
     assert.match(r.text, /空内容/);
   } finally { s.restore(); }
@@ -193,7 +193,7 @@ test('模型返回空内容 → 不算成功', async () => {
 test('模型未返回 content(choices 缺失)→ 不算成功', async () => {
   const s = stubFetch(() => ({ ok: true, status: 200, json: async () => ({ choices: [] }) }));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
     assert.equal(r.ok, false);
     assert.match(r.text, /未返回内容/);
   } finally { s.restore(); }
@@ -202,7 +202,7 @@ test('模型未返回 content(choices 缺失)→ 不算成功', async () => {
 test('maxTokens=0 → 请求体不含 max_tokens 字段(显式关闭)', async () => {
   const s = stubFetch(() => okRes('x'));
   try {
-    await describeImageFromBase64(B64, 'image/png', null, { ...CFG, maxTokens: 0 });
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: { ...CFG, maxTokens: 0 } });
     const body = JSON.parse(s.calls[0].opts.body);
     assert.ok(!('max_tokens' in body), '显式 0 不应发送 max_tokens 字段');
   } finally { s.restore(); }
@@ -211,7 +211,7 @@ test('maxTokens=0 → 请求体不含 max_tokens 字段(显式关闭)', async ()
 test('maxTokens 正数 → 请求体携带指定值', async () => {
   const s = stubFetch(() => okRes('x'));
   try {
-    await describeImageFromBase64(B64, 'image/png', null, { ...CFG, maxTokens: 1000 });
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: { ...CFG, maxTokens: 1000 } });
     const body = JSON.parse(s.calls[0].opts.body);
     assert.equal(body.max_tokens, 1000);
   } finally { s.restore(); }
@@ -224,7 +224,7 @@ test('错误响应体回显本机 apiKey → 替换为 [REDACTED]', async () => 
   const leaky = JSON.stringify({ error: { message: 'invalid key sk-test-abcdefghij', token: 'sk-test-abcdefghij' } });
   const s = stubFetch(() => errRes(400, leaky));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
     assert.equal(r.ok, false);
     assert.ok(!r.text.includes('sk-test-abcdefghij'), '不得回显 apiKey');
     assert.match(r.text, /\[REDACTED\]/);
@@ -236,7 +236,7 @@ test('单行 JSON 错误体回显 "Bearer <JWT>" → 令牌被脱敏(带 scheme 
   const leaky = JSON.stringify({ error: { message: 'invalid_token', raw: `Bearer ${jwt}` } });
   const s = stubFetch(() => errRes(401, leaky));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
     assert.equal(r.ok, false);
     assert.ok(!r.text.includes(jwt), '完整 JWT 不应泄漏');
     assert.ok(!r.text.includes(jwt.split('.')[1]), 'JWT payload 段不应泄漏');
@@ -248,7 +248,7 @@ test('JSON 错误体在敏感字段名(access_token)下回显裸 JWT → 值被�
   const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
   const s = stubFetch(() => errRes(401, JSON.stringify({ error: { access_token: jwt } })));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
     assert.ok(!r.text.includes(jwt.split('.')[1]), 'JWT payload 段不应泄漏');
     assert.match(r.text, /\[REDACTED\]/);
   } finally { s.restore(); }
@@ -258,7 +258,7 @@ test('非 JSON 的凭据行(Authentication: Bearer sk-xxx)整行丢弃', async (
   const leaky = 'Something went wrong\nAuthentication: Bearer sk-test-abcdefghij\nTry again';
   const s = stubFetch(() => errRes(500, leaky));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
     assert.equal(r.ok, false);
     assert.ok(!r.text.includes('sk-test-abcdefghij'));
     assert.ok(!r.text.includes('Authentication: Bearer'), '敏感行应被整行删除');
@@ -270,7 +270,7 @@ test('脱敏后若整段只剩敏感信息 → 提示已隐藏', async () => {
   // 整段是"凭据形态"的行(非 JSON,整行被丢弃) → lines 为空 → 走"已隐藏"分支
   const s = stubFetch(() => errRes(500, 'Authorization: Bearer sk-test-abcdefghij'));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
     assert.equal(r.ok, false);
     assert.ok(!r.text.includes('sk-test-abcdefghij'));
     assert.match(r.text, /已隐藏/);
@@ -280,7 +280,7 @@ test('脱敏后若整段只剩敏感信息 → 提示已隐藏', async () => {
 test('错误响应体为空 → 报"响应体为空",不误标成"敏感信息已隐藏"', async () => {
   const s = stubFetch(() => errRes(500, ''));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
     assert.equal(r.ok, false);
     assert.match(r.text, /响应体为空/);
     assert.ok(!r.text.includes('已隐藏'), '空 body 不应被误标成敏感信息已隐藏');
@@ -290,7 +290,7 @@ test('错误响应体为空 → 报"响应体为空",不误标成"敏感信息�
 test('错误响应体为空白字符 → 同样报"响应体为空"', async () => {
   const s = stubFetch(() => errRes(500, '   \n\t  '));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, CFG);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
     assert.match(r.text, /响应体为空/);
   } finally { s.restore(); }
 });
@@ -370,7 +370,7 @@ test('ocrImage 传 prompt → user 消息原样等于 prompt,系统仍为 OCR、
 test('describeImageFromBase64 传 prompt(第 7 位)→ user 消息原样等于 prompt', async () => {
   const s = stubFetch(() => okRes('图表分析'));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, CFG, undefined, undefined, '分析这张图表的坐标轴与趋势');
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG, prompt: '分析这张图表的坐标轴与趋势' });
     assert.equal(r.ok, true);
     const body = JSON.parse(s.calls[0].opts.body);
     assert.equal(body.messages[1].content[0].text, '分析这张图表的坐标轴与趋势');
@@ -380,7 +380,7 @@ test('describeImageFromBase64 传 prompt(第 7 位)→ user 消息原样等于 p
 test('prompt 为空白 → 视为未传,回退 focus 模板', async () => {
   const s = stubFetch(() => okRes('x'));
   try {
-    await describeImageFromBase64(B64, 'image/png', '关注颜色', CFG, undefined, undefined, '   ');
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', focus: '关注颜色', cfg: CFG, prompt: '   ' });
     const body = JSON.parse(s.calls[0].opts.body);
     assert.match(body.messages[1].content[0].text, /重点关注:关注颜色/, '空白 prompt 应回退到 focus 默认句式');
   } finally { s.restore(); }
@@ -392,7 +392,7 @@ test('prompt 为空白 → 视为未传,回退 focus 模板', async () => {
 test('HTTP 失败 → 写 [vision_failed],含 HTTP 状态与模型', async () => {
   const s = stubFetch(() => errRes(400, 'bad request'));
   try {
-    await describeImageFromBase64(B64, 'image/png', null, CFG);
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
     const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
     assert.match(content, /\[vision_failed\]/);
     assert.match(content, /HTTP 400/);
@@ -403,7 +403,7 @@ test('HTTP 失败 → 写 [vision_failed],含 HTTP 状态与模型', async () =>
 test('成功 → 默认写 [vision_ok],含耗时', async () => {
   const s = stubFetch(() => okRes('ok'));
   try {
-    await describeImageFromBase64(B64, 'image/png', null, CFG);
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
     const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
     assert.match(content, /\[vision_ok\]/);
     assert.match(content, /耗时=\d+ms/);
@@ -421,16 +421,19 @@ test('成功日志不拼路径:[vision_ok] 只含来源标签,不含被看图绝
   } finally { s.restore(); }
 });
 
-test('VISION_LOG_SUCCESS=0 → 成功不写日志', async () => {
-  process.env.VISION_LOG_SUCCESS = '0';
-  const s = stubFetch(() => okRes('ok'));
-  try {
-    await describeImageFromBase64(B64, 'image/png', null, CFG);
-    const logPath = join(logDir, 'log.txt');
-    // 成功日志被关闭时可能根本没创建日志文件,容忍存在/不存在两种状态,只要没有 [vision_ok] 行
-    const content = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
-    assert.ok(!content.includes('[vision_ok]'), '关闭成功日志后不应写 [vision_ok]');
-  } finally { s.restore(); }
+test('VISION_LOG_SUCCESS=0/false → 成功不写日志', async () => {
+  // 0 与 false 等价,值变体解析已由 log.test.js 的 isSuccessLog 覆盖,这里各取一个验证整链路行为
+  for (const v of ['0', 'false']) {
+    process.env.VISION_LOG_SUCCESS = v;
+    const s = stubFetch(() => okRes('ok'));
+    try {
+      await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
+      const logPath = join(logDir, 'log.txt');
+      // 成功日志被关闭时可能根本没创建日志文件,容忍存在/不存在两种状态,只要没有 [vision_ok] 行
+      const content = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
+      assert.ok(!content.includes('[vision_ok]'), `VISION_LOG_SUCCESS=${v} 后不应写 [vision_ok]`);
+    } finally { s.restore(); }
+  }
 });
 
 test('文件不存在 → 写 [vision_failed],日志保留原始绝对路径便于定位', async () => {
@@ -445,7 +448,7 @@ test('VISION_LOG_SUCCESS=0 → 失败仍写 [vision_failed](失败日志不受�
   process.env.VISION_LOG_SUCCESS = '0';
   const s = stubFetch(() => errRes(400, 'bad request'));
   try {
-    await describeImageFromBase64(B64, 'image/png', null, CFG);
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
     const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
     assert.match(content, /\[vision_failed\]/, '失败日志不应受 VISION_LOG_SUCCESS=0 影响');
     assert.ok(!content.includes('[vision_ok]'), '关闭成功日志后不应写 [vision_ok]');
@@ -453,7 +456,7 @@ test('VISION_LOG_SUCCESS=0 → 失败仍写 [vision_failed](失败日志不受�
 });
 
 test('base64 非法输入 → 写 [vision_failed],含来源标签', async () => {
-  await describeImageFromBase64('!!!not-base64!!!', 'image/png', null, CFG);
+  await describeImageFromBase64({ b64: '!!!not-base64!!!', mime: 'image/png', cfg: CFG });
   const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
   assert.match(content, /\[vision_failed\]/);
   assert.match(content, /base64 输入包含非法字符/);
@@ -463,7 +466,7 @@ test('base64 非法输入 → 写 [vision_failed],含来源标签', async () => 
 test('base64 超限 → 写 [vision_failed],不发请求', async () => {
   // maxImageMB 是直接注入对象,不受 buildConfig 钳制;约 2KB 输入超过 0.001MB 限制即触发
   const bigB64 = Buffer.alloc(2000).toString('base64');
-  await describeImageFromBase64(bigB64, 'image/png', null, { ...CFG, maxImageMB: 0.001 });
+  await describeImageFromBase64({ b64: bigB64, mime: 'image/png', cfg: { ...CFG, maxImageMB: 0.001 } });
   const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
   assert.match(content, /\[vision_failed\]/);
   assert.match(content, /图片过大/);
@@ -476,7 +479,7 @@ test('视觉引擎未配置 → 写 [vision_failed],含 模型=(空)', async () 
     delete process.env.VISION_API_BASE;
     delete process.env.VISION_API_KEY;
     delete process.env.VISION_MODEL;
-    await describeImageFromBase64(B64, 'image/png', null, undefined); // 不传 cfg,走 loadConfig 读 env
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: undefined }); // 不传 cfg,走 loadConfig 读 env
     const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
     assert.match(content, /\[vision_failed\]/);
     assert.match(content, /视觉引擎未配置/);
@@ -502,22 +505,11 @@ test('图片为空文件(stat 预检 0 字节)→ 写 [vision_failed]', async ()
   } finally { rmSync(emptyPng, { force: true }); }
 });
 
-test('VISION_LOG_SUCCESS=false → 成功不写日志(false 与 0 等价)', async () => {
-  process.env.VISION_LOG_SUCCESS = 'false';
-  const s = stubFetch(() => okRes('ok'));
-  try {
-    await describeImageFromBase64(B64, 'image/png', null, CFG);
-    const logPath = join(logDir, 'log.txt');
-    const content = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
-    assert.ok(!content.includes('[vision_ok]'), 'VISION_LOG_SUCCESS=false 后不应写 [vision_ok]');
-  } finally { s.restore(); }
-});
-
 test('describeImageFromBase64 传 source(带截图路径)→ 失败日志含原始路径', async () => {
   // 截屏失败日志应能定位到是哪个截图文件:index.js 把 source 拼成 "截屏 <filePath>"
   const s = stubFetch(() => errRes(400, 'bad request'));
   try {
-    await describeImageFromBase64(B64, 'image/png', null, CFG, '截屏 C:\\shots\\shot-1.jpeg', '截屏');
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG, source: '截屏 C:\\shots\\shot-1.jpeg', sourceLabel: '截屏' });
     const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
     assert.match(content, /\[vision_failed\]/);
     assert.match(content, /截屏/, '失败行应含来源标签');
@@ -529,7 +521,7 @@ test('describeImageFromBase64 传 source(带路径)+sourceLabel → 成功日志
   // 成功日志用 sourceLabel('截屏')而非带路径的 source,维持"成功行不含路径"承诺
   const s = stubFetch(() => okRes('ok'));
   try {
-    await describeImageFromBase64(B64, 'image/png', null, CFG, '截屏 C:\\shots\\shot-1.jpeg', '截屏');
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG, source: '截屏 C:\\shots\\shot-1.jpeg', sourceLabel: '截屏' });
     const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
     assert.match(content, /\[vision_ok\] 截屏 成功/, '成功日志应只含纯来源标签');
     assert.ok(!content.includes('shot-1.jpeg'), '成功日志不应包含截图文件路径');
@@ -544,7 +536,7 @@ test('多端点:主端点 503 → 重试后 fallback 到备用端点成功', asy
   const s = stubFetch((url) => url.includes('primary.example.com') ? errRes(503, 'down') : okRes('备用端点成功'));
   try {
     const cfg2 = { ...CFG, apiBases: ['https://primary.example.com/v1', 'https://backup.example.com/v1'], apiBase: 'https://primary.example.com/v1' };
-    const r = await describeImageFromBase64(B64, 'image/png', null, cfg2);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: cfg2 });
     assert.equal(r.ok, true);
     assert.equal(r.text, '备用端点成功');
     assert.equal(s.calls.length, 3, '主端点 503 重试一次 + 备用端点一次,共 3 次请求');
@@ -557,7 +549,7 @@ test('多端点:主端点超时(AbortError)→ fallback 到备用端点', async 
     : okRes('备用成功'));
   try {
     const cfg2 = { ...CFG, apiBases: ['https://primary.example.com/v1', 'https://backup.example.com/v1'] };
-    const r = await describeImageFromBase64(B64, 'image/png', null, cfg2);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: cfg2 });
     assert.equal(r.ok, true);
     assert.equal(r.text, '备用成功');
     assert.equal(s.calls.length, 2, '超时不重试但应 fallback');
@@ -568,7 +560,7 @@ test('多端点:主端点 401(认证错)→ 不 fallback(换端点同 key 不解
   const s = stubFetch(() => errRes(401, 'invalid key'));
   try {
     const cfg2 = { ...CFG, apiBases: ['https://primary.example.com/v1', 'https://backup.example.com/v1'] };
-    const r = await describeImageFromBase64(B64, 'image/png', null, cfg2);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: cfg2 });
     assert.equal(r.ok, false);
     assert.equal(s.calls.length, 1, '401 不应 fallback 到备用端点');
   } finally { s.restore(); }
@@ -578,7 +570,7 @@ test('多端点:两个端点都失败 → 返回失败,两个端点都留失败�
   const s = stubFetch((url) => errRes(500, 'boom'));
   try {
     const cfg2 = { ...CFG, apiBases: ['https://primary.example.com/v1', 'https://backup.example.com/v1'] };
-    const r = await describeImageFromBase64(B64, 'image/png', null, cfg2);
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: cfg2 });
     assert.equal(r.ok, false);
     assert.match(r.text, /HTTP 500/);
     const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
@@ -590,7 +582,7 @@ test('多端点:两个端点都失败 → 返回失败,两个端点都留失败�
 test('多端点:注入只有 apiBase(无 apiBases)→ 兼容单端点', async () => {
   const s = stubFetch(() => okRes('单端点'));
   try {
-    const r = await describeImageFromBase64(B64, 'image/png', null, CFG); // CFG 无 apiBases 字段
+    const r = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG }); // CFG 无 apiBases 字段
     assert.equal(r.ok, true);
     assert.equal(r.text, '单端点');
     assert.equal(s.calls.length, 1);
@@ -605,9 +597,9 @@ test('缓存:cacheSize>0 → 同图同问第二次命中,不发第二次请求',
   const s = stubFetch(() => { n++; return okRes('内容A'); });
   try {
     const cfgC = { ...CFG, cacheSize: 10 };
-    const r1 = await describeImageFromBase64(B64, 'image/png', null, cfgC);
+    const r1 = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: cfgC });
     assert.equal(r1.ok, true);
-    const r2 = await describeImageFromBase64(B64, 'image/png', null, cfgC);
+    const r2 = await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: cfgC });
     assert.equal(r2.ok, true);
     assert.equal(r2.text, '内容A');
     assert.equal(n, 1, '第二次应命中缓存,不发请求');
@@ -619,8 +611,8 @@ test('缓存:不同 prompt 不命中', async () => {
   const s = stubFetch(() => { n++; return okRes('x'); });
   try {
     const cfgC = { ...CFG, cacheSize: 10 };
-    await describeImageFromBase64(B64, 'image/png', '提示A', cfgC);
-    await describeImageFromBase64(B64, 'image/png', '提示B', cfgC);
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', focus: '提示A', cfg: cfgC });
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', focus: '提示B', cfg: cfgC });
     assert.equal(n, 2, 'prompt 不同不命中');
   } finally { s.restore(); clearVisionCache(); }
 });
@@ -629,8 +621,8 @@ test('缓存:cacheSize=0(默认)→ 不缓存,重复调用各发一次', async (
   let n = 0;
   const s = stubFetch(() => { n++; return okRes('x'); });
   try {
-    await describeImageFromBase64(B64, 'image/png', null, CFG);
-    await describeImageFromBase64(B64, 'image/png', null, CFG);
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: CFG });
     assert.equal(n, 2, 'cacheSize=0 不缓存');
   } finally { s.restore(); }
 });
@@ -639,12 +631,24 @@ test('缓存:命中时写 [vision_cache] 日志,且不写 [vision_ok](未实际�
   const s = stubFetch(() => okRes('ok'));
   try {
     const cfgC = { ...CFG, cacheSize: 10 };
-    await describeImageFromBase64(B64, 'image/png', null, cfgC);
-    await describeImageFromBase64(B64, 'image/png', null, cfgC);
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: cfgC });
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: cfgC });
     const content = readFileSync(join(logDir, 'log.txt'), 'utf8');
     assert.match(content, /\[vision_cache\]/);
     const okCount = (content.match(/\[vision_ok\]/g) || []).length;
     assert.equal(okCount, 1, '只有第一次实际调用写 vision_ok');
+  } finally { s.restore(); clearVisionCache(); }
+});
+
+test('缓存:换 apiKey 后同图同问不命中(旧 key 结果不串用)', async () => {
+  let n = 0;
+  const s = stubFetch(() => { n++; return okRes('x'); });
+  try {
+    const cfgA = { ...CFG, cacheSize: 10 };
+    const cfgB = { ...CFG, cacheSize: 10, apiKey: 'sk-other-xxxxxxxxxx' };
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: cfgA });
+    await describeImageFromBase64({ b64: B64, mime: 'image/png', cfg: cfgB });
+    assert.equal(n, 2, '换 key 后不命中缓存,应重新请求');
   } finally { s.restore(); clearVisionCache(); }
 });
 

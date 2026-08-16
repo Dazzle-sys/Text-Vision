@@ -126,20 +126,20 @@ export function createServer(deps = {}) {
         try { await appendLogFn('screen_capture_degrade', shot.note); } catch { /* 日志失败静默 */ }
         debugLogFn('指定窗口截图 note:', shot.note);
       }
-      // 第 4 参是 cfg(缺省走 loadConfig 读 env,这里显式 undefined 占位),第 5 参 source 用于失败日志定位
-      // (拼上截图落盘路径,失败时可查是哪个截图文件)、第 6 参 sourceLabel 用于成功日志(纯标签'截屏',不含路径)。
-      // 第 7 参 prompt 透传:调用者提供的完整提示词,由 buildUserPrompt 原样作 user 消息(覆盖 focusText),
-      // 不能折进 focusText——那会被固定模板二次包裹,违背"原样发送"。
-      // 切勿把 source 直接放第 4 位——cfg 会被字符串污染,describeImageFromBase64 误判"视觉引擎未配置"。
+      // 走 options 对象(顺序无关):cfg 缺省(undefined)走 loadConfig 读 env;source 用于失败日志定位
+      // (拼上截图落盘路径,失败时可查是哪个截图文件);sourceLabel 用于成功日志(纯标签'截屏',不含路径)。
+      // prompt 原样作为 user 消息(覆盖 focusText),不能折进 focusText——那会被固定模板二次包裹,
+      // 违背"原样发送"。options 化后不再有"把 source 误放 cfg 位导致视觉引擎未配置"的参数错位坑。
       const src = shot?.filePath ? `截屏 ${shot.filePath}` : '截屏';
       // focus 提示词:显式传 focus 用它;否则用 target 原文(窗口 ID/进程名/标题)。target 必填(handler 已校验),
       // 历史契约:显式 target 用原文而非命中的真实窗口名(targetLabel),不额外枚举/不改变提示来源。
       const focusText = focus || `指定的窗口:${target}`;
-      const r = await describeBase64(shot.b64, shot.mime, focusText, undefined, src, '截屏', prompt);
+      const r = await describeBase64({ b64: shot.b64, mime: shot.mime, focus: focusText, source: src, sourceLabel: '截屏', prompt });
       // 描述成功才把降级提示拼进返回文本;描述失败时文本是错误文案,note 已通过日志(文件+stderr)传达
       const hint = r.ok && shot?.note ? `\n\n[提示] ${shot.note}` : '';
-      // 截图保留在仓库 .text-vision/screenshots(最近 20 张),直接给完整路径方便打开(运行时输出,不入提交)
-      const saveHint = r.ok && shot?.filePath ? `\n\n[截图已保存到 ${shot.filePath},可打开查看;仅保留最近 20 张,超出自动清理]` : '';
+      // 截图已落盘(无论描述成败,pruneShots 会保留为最近 20 张之一):成功路径附完整路径方便打开;
+      // 失败路径同样提示已保存到哪,避免"视觉请求失败但截图留在磁盘、用户不知情"的隐私/UX 缺口
+      const saveHint = shot?.filePath ? `\n\n[截图已保存到 ${shot.filePath},可打开查看;仅保留最近 20 张,超出自动清理]` : '';
       return textResult({ ok: r.ok, text: r.text + hint + saveHint });
     })
   );

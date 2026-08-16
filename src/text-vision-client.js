@@ -208,7 +208,7 @@ const realRetrySleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ---------------------------------------------------------------------------
 // 成功结果缓存(仅内存,默认关闭):同图 + 同提示词重复调用时省一次视觉调用。
-// key = sha256(apiBase|model|b64|prompt|ocr) 前缀,不存图片内容本身,不落盘。
+// key = sha256(apiBase|apiKey|model|b64|prompt|ocr) 前缀,不存图片内容本身,不落盘。
 // Map 插入序即最旧,超 cacheSize 清最旧(FIFO 够用,视觉结果无热度差异,无需 LRU)。
 // 仅缓存成功文本;失败结果不缓存(瞬时可重试,缓存反而不利)。
 // ---------------------------------------------------------------------------
@@ -220,10 +220,13 @@ export function clearVisionCache() {
 
 function cacheKey(cfg, b64, promptText, ocr) {
   // key 只取主端点(apiBases[0]):缓存语义是"同配置同图同问",主端点即代表配置。
+  // key 含 apiKey:换 key 后同图同问不再命中旧 key 时代的缓存(否则旧结果持续返回,直到进程重启)。
+  // apiKey 只进 sha256 摘要、不落盘不回显,无泄漏风险。
   // 注意:多端点 fallback 下命中缓存,返回的是先前某次成功(可能来自备用端点)的结果,不再重新探测端点健康;
   // 需要"每次请求都实时探测端点可用性"的场景应关闭缓存(VISION_CACHE_SIZE=0)。
   return createHash('sha256')
     .update(cfg.apiBase || '')
+    .update('\u0000').update(cfg.apiKey || '')
     .update('\u0000').update(cfg.model || '')
     .update('\u0000').update(b64)
     .update('\u0000').update(promptText || '')
@@ -249,7 +252,9 @@ function cacheSet(cfg, b64, promptText, ocr, text) {
 // 是哪一次调用失败;sourceLabel 是成功日志用的纯来源标签("描述"/"OCR"/"截屏")——成功只需留痕、
 // 无需精确定位,也避免被看图路径累积进日志文件。调用方不传时按 ocr 标志兜底为"描述"/"OCR"。
 // 日志是本地私有文件(不入 git),失败行记录原始路径便于排查,与 screen_capture_degrade 记窗口标题一致。
-async function callVision(b64, mime, promptText, ocr, cfg, source, sourceLabel) {
+// 参数用 options 对象而非位置参数:cfg/source/sourceLabel 均为可选,位置参数下"想只传 source 必须显式
+// undefined 占住 cfg"极易踩坑(index.js 曾因此出过错),对象解构从根源上消除参数错位。
+async function callVision({ b64, mime, promptText, ocr, cfg, source, sourceLabel }) {
   cfg = cfg || loadConfig();
   const src = source || (ocr ? 'OCR' : '描述');
   // ?? 而非 ||:显式传空字符串也保留(来源标签不会是空,防御未来调用方误传空串回退到含路径的 src)
@@ -480,7 +485,7 @@ async function readLocalImage(path, promptText, ocr, cfg) {
     // isImagePath 已保证是支持的扩展名,mimeFromExt 必返回非 null;压缩产物统一是 JPEG
     const mime = compressed ? 'image/jpeg' : (sniffMime(buf) || mimeFromExt(abs));
     log(`读取图片 ${readPath}(${(buf.length / 1024).toFixed(1)}KB, ${mime})`);
-    return await callVision(buf.toString('base64'), mime, promptText, ocr, cfg, src, label);
+    return await callVision({ b64: buf.toString('base64'), mime, promptText, ocr, cfg, source: src, sourceLabel: label });
   } catch (err) {
     if (err.code === 'ENOENT') {
       // 回显用户传入的原始路径(redactLocalPath 只替换绝对路径,相对路径原样显示),便于核对拼写;
@@ -506,14 +511,13 @@ export async function describeImage(path, focus, prompt) {
   return readLocalImage(path, buildUserPrompt(focus, false, prompt), false);
 }
 
-/** 描述一段已编码的 base64 图片(截屏等场景)。参数顺序:(b64, mime, focus, cfg, source, sourceLabel, prompt)。
- * cfg 缺省(传 undefined)时走 loadConfig() 读环境变量;source 用于失败日志定位(不传默认"截屏",
- * 调用方可拼上原始路径如 "截屏 <filePath>");sourceLabel 是成功日志用的纯来源标签(不含路径),
- * 与 readLocalImage 的 label 语义一致——失败行需精确定位(可带路径),成功行只需留痕、不该让路径累积进日志。
- * prompt 为第 7 位(可选):调用者提供的完整提示词,非空时原样作为 user 消息,覆盖 focus 与默认句式。
- * 注意:cfg 在第 4 位、source 在第 5 位、sourceLabel 在第 6 位,调用方想只传 source/sourceLabel 时必须
- * 显式 `undefined` 占住 cfg,否则字符串会被误当作 cfg,导致"视觉引擎未配置"。 */
-export async function describeImageFromBase64(b64, mime, focus, cfg, source, sourceLabel, prompt) {
+/** 描述一段已编码的 base64 图片(截屏等场景)。参数全部走 options 对象(顺序无关,消除位置参数错位):
+ * 必填 b64(图片 base64 数据)、mime(图片 MIME,缺省 image/png);可选 focus(关注要点,包进默认句式)、
+ * cfg(测试注入用,缺省走 loadConfig() 读环境变量)、source(失败日志定位,缺省"截屏",调用方可拼上原始路径
+ * 如 "截屏 <filePath>")、sourceLabel(成功日志用的纯来源标签,不含路径,缺省取 source)、
+ * prompt(调用者提供的完整提示词,非空时原样作为 user 消息,覆盖 focus 与默认句式)。
+ * 与 readLocalImage 的 label 语义一致——失败行需精确定位(可带路径),成功行只需留痕、不该让路径累积进日志。 */
+export async function describeImageFromBase64({ b64, mime, focus, cfg, source, sourceLabel, prompt }) {
   cfg = cfg || loadConfig();
   const src = source || '截屏';
   // ?? 而非 ||:显式传空字符串也保留(来源标签不会是空,防御未来调用方误传空串回退到含路径的 src)
@@ -534,7 +538,7 @@ export async function describeImageFromBase64(b64, mime, focus, cfg, source, sou
     appendLog('vision_failed', `${src} ${over.text}`);
     return over;
   }
-  return callVision(clean, mime || 'image/png', buildUserPrompt(focus, false, prompt), false, cfg, src, label);
+  return callVision({ b64: clean, mime: mime || 'image/png', promptText: buildUserPrompt(focus, false, prompt), ocr: false, cfg, source: src, sourceLabel: label });
 }
 
 /** 提取图片中的文字(OCR),保留排版顺序。prompt 可选:调用者提供时原样作为 user 消息

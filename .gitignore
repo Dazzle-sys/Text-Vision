@@ -2,5 +2,5 @@ node_modules/
 .text-vision/
 .claude/
 *.log
-/AGENTS.md
-/CLAUDE.md
+/.opencode/
+CLAUDE.md

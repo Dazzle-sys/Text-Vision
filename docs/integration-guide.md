@@ -134,6 +134,8 @@ args = ["text-vision/src/index.js"]
 
 支持的全部环境变量见 README「配置」一节(`VISION_*` 前缀)。也可以不写 `env`,直接在终端导出后启动(如 `export VISION_API_KEY=...`),二选一即可。示例里的 `VISION_TIMEOUT`、`VISION_LOG_FILE` 均可选,含义见 README 对应小节。
 
+> **Claude Code 用户注意**:上面的 `env` 字段只注入到 MCP server 子进程,**对两条 hook(Read 读图 / 粘贴图拦截)不生效**——hook 是 Claude Code 直接启动的独立进程,只读**全局/宿主环境变量**。若要用 hook,请 `export VISION_API_KEY=...`(或写进宿主环境),否则 MCP 工具正常、hook 会静默失效(不注入描述)。详见 [docs/auto-invoke.md](docs/auto-invoke.md)。
+
 ## 7. 换机器 / 换目录
 
 MCP 配置里**唯一要改的就是 `args` 里的启动路径**。复制项目后:

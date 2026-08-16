@@ -134,6 +134,8 @@ This project **reads no configuration file**; all settings come from env vars (t
 
 The complete list of supported env vars is in the README's "Configuration" section. You may also omit the `env` field and `export` the vars in the terminal before starting — either approach is acceptable. The example's `VISION_TIMEOUT` and `VISION_LOG_FILE` are optional; their meanings are in the README's corresponding sections.
 
+> **Claude Code users**: the `env` field above is injected only into the MCP server subprocess — it has **no effect on the two hooks** (`Read` image interception / pasted-image interception). Hooks run as separate processes spawned directly by Claude Code and read **only the global/host environment**. To use the hooks, `export VISION_API_KEY=...` (or set it in the host environment); otherwise the MCP tools work fine but the hooks silently do nothing (no description injected). See [docs/auto-invoke.en.md](docs/auto-invoke.en.md).
+
 ## 7. Moving Machines / Directories
 
 The **only field to change** in the MCP configuration is the startup path in `args`. After copying the project:

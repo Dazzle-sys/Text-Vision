@@ -58,9 +58,10 @@ MCP 注册好≠ hook 生效。hook 要在 Claude Code 的 `settings.json` 里�
 
 - `PreToolUse` 配 `matcher: "Read"` 只拦截模型主动 `Read` 图片;**`UserPromptSubmit` 拦截用户粘贴/拖入的图片**(消息里带 `[Image N] 路径` 或 markdown 图片时,自动转文字注入)。两者互补,可单独启用其一
 - 改完配置**重启 Claude Code** 生效
+- **hook 必须能读到 `VISION_*` 全局环境变量**(`export` 或宿主环境注入):MCP 配置里的 `env` 字段只对 MCP server 生效,hook 读不到。只写进 MCP env 时,hook 会静默失效(不注入描述)
 - 也可放用户级 `~/.claude/settings.json`(所有项目生效),路径同理
 
-> **更快的方式:插件安装(一步注册两条 hook + 技能)**。仓库是 Claude Code 插件,`claude plugin install <本仓库绝对路径>` 后自动启用 `UserPromptSubmit` + `PreToolUse` 两条 hook 与 `skills/` 技能,无需手动写上面的 JSON(见 [../README.md](../README.md) 安装节)。手动注册方式适用于只想用其中一条 hook 的场景。
+> **更快的方式:插件安装(一步启用两条 hook + 技能)**。仓库是 Claude Code 插件,`claude plugin install <本仓库绝对路径>` 后自动启用 `UserPromptSubmit` + `PreToolUse` 两条 hook 与 `skills/` 技能,无需手动写上面的 JSON(见 [../README.md](../README.md) 安装节);规则层(`CLAUDE.md`/`AGENTS.md`)仍按第 2 节手动复制到项目根。手动注册方式适用于只想用其中一条 hook 的场景。
 
 ### 1.2 行为细节
 

@@ -58,9 +58,10 @@ Registering the MCP server does not activate the hook; declare it separately in 
 
 - `PreToolUse` with `matcher: "Read"` intercepts only model-initiated `Read` on images; **`UserPromptSubmit` intercepts pasted/dropped images** (when the message carries `[Image N] path` or a markdown image, it auto-converts to a text description). The two are complementary — enable either one on its own.
 - **Restart Claude Code** after changing the config
+- **The hooks must be able to read the `VISION_*` global env vars** (`export`, or inject via the host environment): the MCP config's `env` field applies only to the MCP server; the hooks can't see it. If you set them only in the MCP `env`, the hooks silently do nothing (no description injected).
 - A user-level `~/.claude/settings.json` (all projects) is also supported
 
-> **Faster path: plugin install (registers both hooks + skill in one step)**. The repo is a Claude Code plugin — `claude plugin install <absolute repo path>` auto-enables `UserPromptSubmit` + `PreToolUse` and the `skills/` skill, so no manual JSON above is needed (see the README "Installation" section). Manual registration suits scenarios where you want only one of the hooks.
+> **Faster path: plugin install (enables both hooks + skill in one step)**. The repo is a Claude Code plugin — `claude plugin install <absolute repo path>` auto-enables `UserPromptSubmit` + `PreToolUse` and the `skills/` skill, so no manual JSON above is needed (see the README "Installation" section); the rule layer (`CLAUDE.md`/`AGENTS.md`) still needs to be copied into each project root per section 2. Manual registration suits scenarios where you want only one of the hooks.
 
 ### 1.2 Behavior Details
 

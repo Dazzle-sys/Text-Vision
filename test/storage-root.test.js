@@ -4,7 +4,7 @@
 // ENOTDIR,三个平台一致、等价于不可写。
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, rmSync, readdirSync, existsSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, rmSync, readdirSync, existsSync, mkdtempSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveStorageRoot, storageFallbackReason, setStorageRootForTest, setRepoProbeForTest, setHomeProbeForTest, resetStorageRootForTest } from '../src/storage-root.js';
@@ -18,11 +18,13 @@ beforeEach(() => {
   errMsgs = [];
   origError = console.error;
   console.error = (...a) => { errMsgs.push(a.join(' ')); }; // patch 收集 stderr,供回退提示断言
+  delete process.env.VISION_STORAGE_ROOT; // 防御进程级显式根污染探测/回退用例
   resetStorageRootForTest();
 });
 afterEach(() => {
   console.error = origError;
   resetStorageRootForTest();
+  delete process.env.VISION_STORAGE_ROOT;
   if (savedDebugEnv === undefined) delete process.env.DEBUG_VISION;
   else process.env.DEBUG_VISION = savedDebugEnv;
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* 忽略 */ }
@@ -35,6 +37,29 @@ test('仓库可写 → 返回仓库候选,无探针残留', () => {
     assert.equal(resolveStorageRoot(), candidate);
     const leftovers = readdirSync(candidate).filter(f => f.startsWith('.tv-probe-'));
     assert.equal(leftovers.length, 0, '探针写入后应被清理,不留残留');
+  } finally { resetStorageRootForTest(); }
+});
+
+test('探测成功后顺手清理历史残留的 .tv-probe-* 文件', () => {
+  const candidate = join(dir, 'repo', '.text-vision');
+  setRepoProbeForTest(candidate);
+  try {
+    mkdirSync(candidate, { recursive: true }); // 预置目录再放残留
+    writeFileSync(join(candidate, '.tv-probe-stale-1'), 'old'); // 历史残留(模拟之前 unlink 失败)
+    writeFileSync(join(candidate, '.tv-probe-stale-2'), 'old');
+    writeFileSync(join(candidate, 'shot-normal.png'), 'keep');  // 非探针文件不应被删
+    assert.equal(resolveStorageRoot(), candidate);
+    const leftovers = readdirSync(candidate).filter(f => f.startsWith('.tv-probe-'));
+    assert.equal(leftovers.length, 0, '历史探针残留应被清理');
+    assert.equal(existsSync(join(candidate, 'shot-normal.png')), true, '业务文件不应被误删');
+  } finally { resetStorageRootForTest(); }
+});
+
+test('探针残留清理:目录不存在时静默不抛', () => {
+  const candidate = join(dir, 'no-such-dir', '.text-vision');
+  setRepoProbeForTest(candidate);
+  try {
+    assert.doesNotThrow(() => resolveStorageRoot());
   } finally { resetStorageRootForTest(); }
 });
 
@@ -111,5 +136,46 @@ test('仓库可写时 DEBUG_VISION=1 → 不打回退提示', () => {
     resolveStorageRoot();
     assert.equal(errMsgs.length, 0, '仓库可写不应打回退提示');
     assert.equal(storageFallbackReason(), null, '仓库可写时无回退说明');
+  } finally { resetStorageRootForTest(); }
+});
+
+// ---------------------------------------------------------------------------
+// 显式 VISION_STORAGE_ROOT:用户意图优先,跳过探测
+// ---------------------------------------------------------------------------
+test('显式 VISION_STORAGE_ROOT → 直接使用(跳过探测),目录被创建', () => {
+  const explicit = join(dir, 'explicit-root');
+  try {
+    assert.equal(resolveStorageRoot({ VISION_STORAGE_ROOT: explicit }), explicit);
+    assert.equal(existsSync(explicit), true, '显式根目录应被创建');
+    assert.equal(storageFallbackReason(), null, '显式根不设回退文案');
+  } finally { resetStorageRootForTest(); }
+});
+
+test('显式 VISION_STORAGE_ROOT → 带首尾空白时 trim 后再用', () => {
+  const explicit = join(dir, 'explicit-trim');
+  try {
+    assert.equal(resolveStorageRoot({ VISION_STORAGE_ROOT: `  ${explicit}  ` }), explicit);
+  } finally { resetStorageRootForTest(); }
+});
+
+test('显式 VISION_STORAGE_ROOT → 即使仓库候选不可写也用它(不探测不回退)', () => {
+  const blocker = join(dir, 'blocker');
+  writeFileSync(blocker, 'x'); // 普通文件占位,mkdir(recursive) 抛 ENOTDIR,等价不可写
+  const explicit = join(dir, 'explicit-ok');
+  setRepoProbeForTest(join(blocker, '.text-vision')); // 即便仓库候选不可写
+  setHomeProbeForTest(join(dir, 'home', '.text-vision'));
+  try {
+    assert.equal(resolveStorageRoot({ VISION_STORAGE_ROOT: explicit }), explicit, '显式根跳过探测');
+    assert.equal(storageFallbackReason(), null, '显式根不触发回退语义');
+  } finally { resetStorageRootForTest(); }
+});
+
+test('显式根目录不可创建(祖先被文件占位)→ 仍返回该路径、不抛', () => {
+  const blocker = join(dir, 'blocker2');
+  writeFileSync(blocker, 'x');
+  const bad = join(blocker, 'sub', 'root');
+  try {
+    assert.doesNotThrow(() => resolveStorageRoot({ VISION_STORAGE_ROOT: bad }));
+    assert.equal(resolveStorageRoot({ VISION_STORAGE_ROOT: bad }), bad, 'mkdir 失败仍返回路径,写失败交给调用方');
   } finally { resetStorageRootForTest(); }
 });

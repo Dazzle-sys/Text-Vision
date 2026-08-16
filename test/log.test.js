@@ -28,6 +28,14 @@ test('logFilePath:配置 VISION_LOG_FILE → 返回配置值(去空白)', () => 
   assert.equal(logFilePath({ VISION_LOG_FILE: '  C:/logs/tv.log  ' }), 'C:/logs/tv.log');
 });
 
+test('logFilePath:显式 VISION_STORAGE_ROOT → log.txt 落其下(不探测)', () => {
+  const root = join(dir, 'explicit-root');
+  try {
+    assert.equal(logFilePath({ VISION_STORAGE_ROOT: root }), join(root, 'log.txt'));
+    assert.equal(existsSync(root), true, '显式根目录应被创建');
+  } finally { resetStorageRootForTest(); }
+});
+
 test('isSuccessLog:默认开启;0/false 关闭;带空白先 trim;FALSE 大写仍视为开启', () => {
   assert.equal(isSuccessLog({}), true);
   assert.equal(isSuccessLog({ VISION_LOG_SUCCESS: '' }), true);

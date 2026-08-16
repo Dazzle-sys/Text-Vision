@@ -1,8 +1,10 @@
 // 存储根(log.txt 与 screenshots 的公共父目录)解析与探测:
 // 默认仓库根下 .text-vision(见 repo-root.js 的 visionDir);仓库不可写(只读安装/全局目录,如
 // 全局 npm / Program Files)时,首次使用探针探测后自动回退用户主目录 ~/.text-vision。
-// 判定结果进程内缓存:仓库只读与否在启动后一般不变,无需每次写入都重新探测。
-import { mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
+// 显式设置 VISION_STORAGE_ROOT 时优先:用户明确指定存储根(log 落 ${root}/log.txt、截图落 ${root}/screenshots),
+// 跳过探测(显式配置即意图,无需再判断仓库可写性;目录尽力 mkdir)。
+// 判定结果进程内缓存:仓库只读与否/显式根在启动后一般不变,无需每次写入都重新探测。
+import { mkdirSync, writeFileSync, unlinkSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { visionDir } from './repo-root.js';
@@ -19,13 +21,39 @@ function probeFilePath(baseDir) {
 }
 
 /**
- * 解析并返回存储根(base 目录,其下有 log.txt 与 screenshots/)。首次调用时探测仓库可写性:
- * 在仓库 .text-vision 创建目录并写入探针文件,成功→仓库模式;任何抛错(权限 EACCES/EROFS、
- * 祖先路径被文件占位 ENOTDIR 等)→回退用户目录 ~/.text-vision(尽力 mkdir,失败仍返回该路径,
- * 后续写失败交给 log 静默 / 截屏报错)。判定结果缓存。
+ * 清理目录下残留的 .tv-probe-* 探针文件(unlink 失败/进程被硬杀时可能留下)。
+ * 幂等静默:目录不存在/读失败/单个删除失败都忽略;只删探针前缀文件,绝不碰业务文件。
+ * 随机名 + 探针生命周期极短,并发进程在途的探针被误删的窗口极小(后果仅是对方探测重试),可接受。
  */
-export function resolveStorageRoot() {
+function cleanupProbeFiles(baseDir) {
+  let names;
+  try { names = readdirSync(baseDir); } catch { return; }
+  for (const name of names) {
+    if (name.startsWith('.tv-probe-')) {
+      try { unlinkSync(join(baseDir, name)); } catch { /* 并发删除/已删则忽略 */ }
+    }
+  }
+}
+
+/**
+ * 解析并返回存储根(base 目录,其下有 log.txt 与 screenshots/)。
+ * env 可注入(fake env,与 logFilePath/defaultShotsDir 同模式),缺省读全局 process.env。
+ * 显式 VISION_STORAGE_ROOT:直接 mkdir 并使用(跳过探测),语义=用户意图,日志/截图统一落其下。
+ * 否则首次调用时探测仓库可写性:在仓库 .text-vision 创建目录并写入探针文件,成功→仓库模式;
+ * 任何抛错(权限 EACCES/EROFS、祖先路径被文件占位 ENOTDIR 等)→回退用户目录 ~/.text-vision
+ * (尽力 mkdir,失败仍返回该路径,后续写失败交给 log 静默 / 截屏报错)。判定结果缓存。
+ */
+export function resolveStorageRoot(env = process.env) {
   if (cachedRoot !== null) return cachedRoot;
+  const explicit = (env.VISION_STORAGE_ROOT || '').trim();
+  if (explicit) {
+    // 显式根:用户意图优先,不探测、不设置回退文案;目录尽力创建(失败仍返回路径,写失败交给调用方)
+    debugLog(`存储根使用显式配置 ${explicit}`);
+    try { mkdirSync(explicit, { recursive: true }); } catch { /* 尽力而为 */ }
+    cleanupProbeFiles(explicit);
+    cachedRoot = explicit;
+    return explicit;
+  }
   const repoBase = repoProbeOverride ?? visionDir();
   const probePath = probeFilePath(repoBase);
   try {
@@ -41,8 +69,9 @@ export function resolveStorageRoot() {
     return homeBase;
   }
   // 写入成功即判定仓库可写。unlink 独立 try/catch:失败(文件被占/杀软瞬时锁)只留一个
-  // gitignored 的 .tv-probe-* 残留(不受 pruneShots/轮转影响),绝不能让清理失败误判成回退
+  // gitignored 的 .tv-probe-* 残留;顺手清理本目录历史残留,避免无限累积。
   try { unlinkSync(probePath); } catch { /* 忽略 */ }
+  cleanupProbeFiles(repoBase);
   cachedRoot = repoBase;
   return repoBase;
 }

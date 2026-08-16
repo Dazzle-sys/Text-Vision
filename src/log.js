@@ -21,11 +21,12 @@ export function isSuccessLog(env = process.env) {
 
 /**
  * 日志文件路径:VISION_LOG_FILE 配置则用它,否则默认存储根下的 log.txt——存储根由 resolveStorageRoot 解析:
- * 仓库可写时即仓库根 .text-vision(不随启动目录变,谁调用都落在各自仓库),仓库只读安装时自动回退用户主目录 ~/.text-vision。
+ * 显式 VISION_STORAGE_ROOT 优先(直接用它);否则仓库可写时即仓库根 .text-vision(不随启动目录变,
+ * 谁调用都落在各自仓库),仓库只读安装时自动回退用户主目录 ~/.text-vision。
  * env 可注入(fake env),便于测试。
  */
 export function logFilePath(env = process.env) {
-  return (env.VISION_LOG_FILE || '').trim() || join(resolveStorageRoot(), 'log.txt');
+  return (env.VISION_LOG_FILE || '').trim() || join(resolveStorageRoot(env), 'log.txt');
 }
 
 /**

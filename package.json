@@ -7,7 +7,7 @@
   "mcpName": "io.github.dazzle-sys/text-vision",
   "files": [
     "src",
-    "hooks",
+    "hooks/*.js",
     "templates",
     "docs",
     "server.json",
@@ -17,8 +17,10 @@
   ],
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test --test-concurrency=1",
+    "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
     "check:docs": "node scripts/check-doc-paths.js",
+    "check:version": "node scripts/check-version.js",
+    "prepublishOnly": "npm run check:version && npm run check:docs",
     "gen:test-image": "node scripts/gen-test-image.js",
     "test:describe": "node -e \"import('./src/text-vision-client.js').then(async m => console.log(JSON.stringify(await m.describeImage('test/test.png'), null, 2)))\"",
     "test:capture": "node -e \"import('./src/list-windows.js').then(async l => { const ws = await l.listWindows(); if (!ws.length) throw new Error('没有枚举到窗口,请先打开一个程序窗口'); const m = await import('./src/capture-screen.js'); console.log((await m.captureScreen({ target: ws[0].id })).filePath); })\""

@@ -4,7 +4,7 @@
 // Windows PowerShell + System.Drawing(零安装,与截屏/枚举同一模式)。
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { statSync, unlinkSync } from 'node:fs';
+import { statSync, unlinkSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolvePsExe } from './ps-exe.js';
@@ -24,26 +24,8 @@ function tempOutPath(edge) {
 
 // Windows 压缩脚本:LoadImage → 等比缩放到最长边 → 存 JPEG(质量 85)。
 // 参数经环境变量传入(与截屏 WIN_PS 同一模式,避免路径含空格/引号时的转义问题)。
-const WIN_COMPRESS_PS = `
-$ErrorActionPreference = 'Stop';
-Add-Type -AssemblyName System.Drawing;
-$img = [System.Drawing.Image]::FromFile($env:TV_COMPRESS_IN);
-try {
-  $maxEdge = [double]$env:TV_COMPRESS_MAXEDGE;
-  $scale = [Math]::Min(1.0, $maxEdge / [Math]::Max([double]$img.Width, [double]$img.Height));
-  $nw = [Math]::Max(1, [int]($img.Width * $scale));
-  $nh = [Math]::Max(1, [int]($img.Height * $scale));
-  $bmp = New-Object System.Drawing.Bitmap $nw, $nh;
-  $g = [System.Drawing.Graphics]::FromImage($bmp);
-  $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic;
-  $g.DrawImage($img, 0, 0, $nw, $nh);
-  $enc = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' };
-  $params = New-Object System.Drawing.Imaging.EncoderParameters(1);
-  $params.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, 85L);
-  $bmp.Save($env:TV_COMPRESS_OUT, $enc, $params);
-  $g.Dispose(); $bmp.Dispose();
-} finally { $img.Dispose() }
-`;
+// 脚本从独立文件读取(import.meta.url 定位),获得独立 diff 与 PowerShell 语法检查。
+const WIN_COMPRESS_PS = readFileSync(new URL('./scripts/win-compress.ps1', import.meta.url), 'utf8');
 
 function runWinCompress(inPath, outPath, maxEdge, { spawnFn = spawn, psExe, fallbackDelay = 3000 } = {}) {
   return new Promise((resolvePromise, reject) => {

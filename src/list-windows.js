@@ -42,7 +42,9 @@ export function matchWindow(target, windows) {
       if (byId) return byId;
     }
   }
-  const rank = key => (key === t ? 3 : (key.startsWith(t) ? 2 : (key.includes(t) ? 1 : 0)));
+  // 单字符 target(如 "a")用 includes 会命中几乎所有窗口,误截到枚举序第一个含该字符的窗口;
+  // 长度 < 2 的 target 只参与精确(3)/前缀(2)匹配,不做包含匹配(1)。
+  const rank = key => (key === t ? 3 : (key.startsWith(t) ? 2 : (t.length >= 2 && key.includes(t) ? 1 : 0)));
   let best = null;
   let bestRank = 0;
   for (const w of windows) { // 第一遍:进程名
@@ -63,45 +65,8 @@ export function matchWindow(target, windows) {
 // --- Windows:PowerShell EnumWindows 枚举当前打开窗口(含最小化,输出 minimized 标记),输出 JSON 数组 ---
 // 标题用 SendMessageTimeout(WM_GETTEXT, SMTO_ABORTIFHUNG) 而非裸 GetWindowText:
 // 后者对无响应进程会同步卡死整个 PS 进程,SMTO_ABORTIFHUNG 让超时(2s)即返回,枚举永不挂起。
-const WIN_ENUM_PS = `
-$ErrorActionPreference = 'Stop';
-Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; using System.Text; using System.Diagnostics;
-public class WinEnum {
-  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-  [DllImport("user32.dll", EntryPoint = "SendMessageTimeout")] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
-  [DllImport("user32.dll", EntryPoint = "SendMessageTimeout")] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, StringBuilder lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
-  public static string[] Enumerate() {
-    var items = new System.Collections.Generic.List<string>();
-    EnumWindows((h, l) => {
-      if (!IsWindowVisible(h)) return true;
-      IntPtr dummy;
-      // WM_GETTEXTLENGTH 把文本长度放 lpdwResult(out 参数),SendMessageTimeout 返回值只表示"消息是否处理成功"
-      IntPtr ok = SendMessageTimeout(h, 0x000E, IntPtr.Zero, IntPtr.Zero, 0x2, 2000, out dummy);
-      if (ok == IntPtr.Zero) return true; // 窗口无响应,跳过
-      int len = (int)dummy;
-      if (len <= 0 || len > 4096) return true;
-      var sb = new StringBuilder(len + 1);
-      SendMessageTimeout(h, 0x000D, (IntPtr)(len + 1), sb, 0x2, 2000, out dummy); // WM_GETTEXT:wParam=buffer 长度
-      // 注意:外层 Add-Type 用 PS 单引号包 C#,这里的字符串必须用双引号(单引号字符字面量会提前终止 PS 字符串)
-      string title = sb.ToString().Replace("\\t", " ").Replace("\\r", " ").Replace("\\n", " ");
-      if (string.IsNullOrWhiteSpace(title)) return true;
-      uint pid; GetWindowThreadProcessId(h, out pid);
-      string proc = "";
-      try { proc = Process.GetProcessById((int)pid).ProcessName; } catch { }
-      // 第 5 段 pid:供 list_windows 展示与"按 PID 精确定位"的 target 选择依据
-      items.Add(h.ToInt64() + "\\t" + proc + "\\t" + title + "\\t" + (IsIconic(h) ? "1" : "0") + "\\t" + pid);
-      return true;
-    }, IntPtr.Zero);
-    return items.ToArray();
-  }
-}';
-$items = [WinEnum]::Enumerate();
-if ($items.Count -eq 0) { '[]' } else { $items | ConvertTo-Json -Compress }
-`;
+// 脚本从独立文件读取(import.meta.url 定位),获得独立 diff 与 PowerShell 语法检查;内容仍以 -Command 传入。
+const WIN_ENUM_PS = readFileSync(new URL('./scripts/win-enum.ps1', import.meta.url), 'utf8');
 
 export async function listWindowsWin32({ execFileFn = execFileP, timeout = CMD_TIMEOUT, psExe } = {}) {
   // 与截屏侧共用 resolvePsExe:显式注入优先,否则按 VISION_POWERSHELL → pwsh 探测 → powershell.exe 解析,
@@ -131,21 +96,10 @@ export function parseWin32(stdout) {
   }
 }
 
-// --- macOS:swift 内联脚本调 CGWindowListCopyWindowInfo,输出 tab 分隔行(零额外库,需 Xcode CLT) ---
+// --- macOS:swift 脚本调 CGWindowListCopyWindowInfo,输出 tab 分隔行(零额外库,需 Xcode CLT) ---
 // 屏幕录制权限未授予时 kCGWindowName 全空(隐私保护),由 JS 侧诊断:有窗口但所有标题为空 → 权限问题。
-const MAC_ENUM_SWIFT = `import CoreGraphics
-import Foundation
-let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-for w in info {
-  let layer = w[kCGWindowLayer as String] as? Int ?? 0
-  guard layer == 0 else { continue }
-  let num = w[kCGWindowNumber as String] as? Int ?? 0
-  let owner = w[kCGWindowOwnerName as String] as? String ?? ""
-  let pid = w[kCGWindowOwnerPID as String] as? Int ?? 0
-  let title = (w[kCGWindowName as String] as? String ?? "").replacingOccurrences(of: "\\t", with: " ")
-  print("\\(num)\\t\\(owner)\\t\\(title)\\t\\(pid)")
-}
-`;
+// 脚本从独立文件读取(import.meta.url 定位),获得独立 diff 与 swift 语法检查。
+const MAC_ENUM_SWIFT = readFileSync(new URL('./scripts/mac-enum.swift', import.meta.url), 'utf8');
 
 export async function listWindowsMac({ execFileFn = execFileP, timeout = SLOW_TIMEOUT } = {}) {
   const { stdout } = await execFileFn('swift', ['-'], { input: MAC_ENUM_SWIFT, timeout, maxBuffer: MAX_BUFFER });

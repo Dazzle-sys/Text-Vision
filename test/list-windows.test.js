@@ -17,6 +17,18 @@ const WS = [
   { id: '3', process: 'explorer', title: '文件资源管理器' }
 ];
 
+test('matchWindow:单字符 target 仅精确/前缀匹配,不做包含(避免命中几乎所有窗口)', () => {
+  // 单字符 "a" 关闭 includes:含 a 但非前缀的 'Calculator' 不应被命中
+  const list = [
+    { id: 'a', process: 'x', title: 'Calculator' },
+    { id: 'b', process: 'y', title: 'B' }
+  ];
+  assert.equal(matchWindow('a', list), null, "单字符 'a' 不应包含匹配到 Calculator");
+  // 精确/前缀匹配仍有效
+  assert.equal(matchWindow('a', [{ id: 'p', process: 'x', title: 'a' }]).id, 'p', '单字符精确匹配仍有效');
+  assert.equal(matchWindow('a', [{ id: 'p', process: 'x', title: 'app' }, { id: 'q', process: 'y', title: 'zz' }]).id, 'p', '单字符前缀匹配仍有效');
+});
+
 test('matchWindow:空 target 返回 null', () => {
   assert.equal(matchWindow('', WS), null);
   assert.equal(matchWindow('   ', WS), null);
